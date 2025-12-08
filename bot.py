@@ -18,10 +18,45 @@ VC_CHANNEL_ID = 1446752109151260792   # ✅ GREETING CHANNEL
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 
-# ✅ NSFW ENABLED TAGS
+# ✅ STRICT HENTAI / ANIME-ART ONLY
 GIPHY_ALLOWED_TAGS = [
-    "anime sexy", "anime waifu", "hentai", "anime ecchi",
-    "anime boobs", "anime ass", "anime milf", "anime girl"
+    "anime sexy",
+    "anime waifu",
+    "hentai",
+    "anime ecchi",
+    "anime boobs",
+    "anime ass",
+    "anime milf",
+    "anime girl",
+    "hentai anime",
+    "anime girl ecchi",
+    "genshin impact anime",
+    "gaming anime girl",
+    "anime fighting scene",
+    "anime battle",
+
+    # ✅ More hentai / anime-art related tags added
+    "hentai anime art",
+    "anime hentai",
+    "anime ecchi hentai",
+    "nsfw anime art",
+    "hentai waifu",
+    "hentai anime girl",
+    "anime hentai gif",
+    "2d hentai animation",
+    "anime nsfw gif",
+    "ecchi anime girl",
+    "anime fanservice",
+    "anime lewd",
+    "anime ero",
+    "waifu ecchi",
+    "hentai 2d animation",
+    "anime blush ecchi",
+    "anime seductive",
+    "anime suggestive",
+    "ecchi fighting anime",
+    "lewd anime girl",
+    "anime swimsuit ecchi"
 ]
 GIPHY_RATING = "r"
 
@@ -241,7 +276,7 @@ async def autosave_task():
         json.dump(data, f, indent=2)
 
 # -------------------------
-# NSFW GIPHY FETCH (NO DUPLICATE LIMIT)
+# NSFW HENTAI GIF FETCH
 # -------------------------
 async def fetch_giphy():
     tag = random.choice(GIPHY_ALLOWED_TAGS)
@@ -321,7 +356,7 @@ async def on_voice_state_update(member, before, after):
         embed.set_image(url=f"attachment://{gif_name}")
 
         if text_channel:
-            await text_channel.send(embed=embed, file=file)
+            await text_channel.send(content=member.mention, embed=embed, file=file)
 
         try:
             await member.send(embed=embed, file=file)
@@ -340,14 +375,13 @@ async def on_voice_state_update(member, before, after):
         embed.set_image(url=f"attachment://{gif_name}")
 
         if text_channel:
-            await text_channel.send(embed=embed, file=file)
+            await text_channel.send(content=member.mention, embed=embed, file=file)
 
         try:
             await member.send(embed=embed, file=file)
         except:
             pass
 
-        # ✅ AUTO DISCONNECT
         if vc and len([m for m in vc.channel.members if not m.bot]) == 0:
             await vc.disconnect()
 
