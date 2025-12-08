@@ -36,19 +36,30 @@ DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 500  # keep history bounded to avoid unbounded data growth
 
-# ✅ STRICT HENTAI / ANIME-ART RELATED TAGS (these are used for Tenor/Giphy searches)
+# -------------------------
+# GIF TAGS (combined: your requested + optimized)
+# -------------------------
 GIF_TAGS = [
     "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
-    "anime ass","anime milf","anime girl","hentai anime","anime girl ecchi",
-    "genshin impact waifu","game waifu","anime hot girl","anime milf",
-    "hentai anime girl","funny hentai","anime ecchi hentai","nsfw anime",
-    "hentai waifu","hentai anime girl","anime hentai gif","hentai animation",
-    "anime nsfw gif","ecchi anime girl","anime fanservice","anime lewd","anime ero",
-    "waifu ecchi","hentai fanmade","anime blush ecchi","anime seductive",
-    "anime suggestive","ecchi fighting anime","lewd anime girl","anime swimsuit ecchi"
+    "anime ass","anime milf","anime girl","anime girl ecchi",
+    "genshin impact waifu","game waifu","anime hot girl","anime seductive",
+    "anime suggestive","ecchi anime girl","anime fanservice","anime ero",
+    "waifu ecchi","anime blush ecchi","ecchi fighting anime","anime swimsuit ecchi",
+    "anime thick","anime oppai","anime jiggle","anime thighs",
+    "anime thick thighs","anime booty","anime booty shorts","anime lingerie girl",
+    "anime bikini girl","anime teasing anime girl","anime mature woman","anime older waifu",
+    "anime charm girl","anime flirty","anime sensual","anime blushing girl",
+    # romantic / kiss / hug
+    "anime kiss","anime couple kiss","anime romantic","romantic anime",
+    "anime hug","cute anime hug","anime love","anime couple hug",
+    # user requested explicit-ish tags (you asked)
+    "sexy anime girl","horny anime","horny waifu","sexy milf anime",
+    "anime milf horny","romantic hentai","ecchi kiss","ecchi hug"
 ]
 
-GIPHY_RATING = "r"
+# keep as you asked
+GIPHY_RATING = "pg-13"
+TENOR_CONTENT_FILTER = "medium"
 
 # -------------------------
 # LOGGING
