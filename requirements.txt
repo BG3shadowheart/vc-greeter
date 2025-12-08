@@ -1,3 +1,4 @@
 discord.py
-edge-tts
+Pillow
+aiohttp
 PyNaCl
