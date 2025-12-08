@@ -1,6 +1,7 @@
 # bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | Multi-VC | No Server Mention)
 # FULL SCRIPT — copy & paste as-is
 # Added: owner-only react-based GIF rejection (owner can ❌ a GIF to never use it again for that server)
+# Updated: wait before adding reactions so owner has time to react
 
 import os
 import io
@@ -511,11 +512,13 @@ async def on_voice_state_update(member, before, after):
                         save_data()
                     # add reactions for owner to choose (only useful if gif present)
                     if sent:
-                        try:
-                            await sent.add_reaction("✅")
-                            await sent.add_reaction("❌")
-                        except Exception:
-                            pass
+                        # WAIT a moment to ensure Discord has processed the message before reacting
+                        await asyncio.sleep(1)
+                        for emoji in ("✅", "❌"):
+                            try:
+                                await sent.add_reaction(emoji)
+                            except Exception as e:
+                                logger.debug(f"Failed to add reaction {emoji} to message {sent.id}: {e}")
                 except Exception:
                     pass
 
@@ -577,11 +580,13 @@ async def on_voice_state_update(member, before, after):
                         data.setdefault("message_gif_map", {}).setdefault(gid, {})[str(sent.id)] = gif_url
                         save_data()
                     if sent:
-                        try:
-                            await sent.add_reaction("✅")
-                            await sent.add_reaction("❌")
-                        except Exception:
-                            pass
+                        # WAIT a moment to ensure Discord has processed the message before reacting
+                        await asyncio.sleep(1)
+                        for emoji in ("✅", "❌"):
+                            try:
+                                await sent.add_reaction(emoji)
+                            except Exception as e:
+                                logger.debug(f"Failed to add reaction {emoji} to message {sent.id}: {e}")
                 except Exception:
                     pass
 
