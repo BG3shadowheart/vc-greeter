@@ -22,11 +22,11 @@ AUTOSAVE_INTERVAL = 30
 GIPHY_ALLOWED_TAGS = [
     "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
     "anime ass","anime milf","anime girl","hentai anime","anime girl ecchi",
-    "genshin waifu","sexy anime girl","anime mommy","anime big boobs",
+    "genshin impact anime","gaming anime girl","anime fighting scene","anime battle",
     "hentai anime art","anime hentai","anime ecchi hentai","nsfw anime art",
-    "hentai waifu","hentai anime girl","anime hentai gif","hentai funny",
+    "hentai waifu","hentai anime girl","anime hentai gif","2d hentai animation",
     "anime nsfw gif","ecchi anime girl","anime fanservice","anime lewd","anime ero",
-    "waifu ecchi","hentai animation","anime blush ecchi","anime seductive",
+    "waifu ecchi","hentai 2d animation","anime blush ecchi","anime seductive",
     "anime suggestive","ecchi fighting anime","lewd anime girl","anime swimsuit ecchi"
 ]
 
