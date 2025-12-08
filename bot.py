@@ -1,4 +1,4 @@
-# bot.py — Optimized Anime Welcome Bot (NSFW | Custom Messages | No GIF Duplication Limit)
+# bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | No Mention in Server)
 
 import os, io, json, asyncio, random, hashlib, logging
 from datetime import datetime
@@ -10,6 +10,7 @@ from discord.ext import commands, tasks
 # CONFIG
 # -------------------------
 TOKEN = os.getenv("TOKEN")
+TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 
 VC_ID = 1353875050809524267
@@ -19,14 +20,14 @@ DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 
 # ✅ STRICT HENTAI / ANIME-ART ONLY
-GIPHY_ALLOWED_TAGS = [
+GIF_TAGS = [
     "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
     "anime ass","anime milf","anime girl","hentai anime","anime girl ecchi",
-    "genshin impact anime","gaming anime girl","anime fighting scene","anime battle",
-    "hentai anime art","anime hentai","anime ecchi hentai","nsfw anime art",
-    "hentai waifu","hentai anime girl","anime hentai gif","2d hentai animation",
+    "genshin impact waifu","game waifu","anime hot girl","anime milf",
+    "hentai anime girl","funny hentai","anime ecchi hentai","nsfw anime",
+    "hentai waifu","hentai anime girl","anime hentai gif","hentai animation",
     "anime nsfw gif","ecchi anime girl","anime fanservice","anime lewd","anime ero",
-    "waifu ecchi","hentai 2d animation","anime blush ecchi","anime seductive",
+    "waifu ecchi","hentai fanmade","anime blush ecchi","anime seductive",
     "anime suggestive","ecchi fighting anime","lewd anime girl","anime swimsuit ecchi"
 ]
 
@@ -245,41 +246,59 @@ async def autosave_task():
         json.dump(data, f, indent=2)
 
 # -------------------------
-# FETCH GIF FROM GIPHY
+# FETCH GIF (TENOR FIRST, FALLBACK GIPHY)
 # -------------------------
-async def fetch_giphy():
-    tag = random.choice(GIPHY_ALLOWED_TAGS)
-    url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
+async def fetch_gif():
+    tag = random.choice(GIF_TAGS)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            obj = await resp.json()
-            gif_url = obj["data"]["images"]["original"]["url"]
+    # ----- Try Tenor -----
+    if TENOR_API_KEY:
+        try:
+            url = f"https://g.tenor.com/v1/random?q={tag}&key={TENOR_API_KEY}&limit=1&contentfilter=off"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    data = await resp.json()
+                    gif_url = data['results'][0]['media'][0]['gif']['url']
+                    async with session.get(gif_url) as r:
+                        gif_bytes = await r.read()
+                        name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
+                        return gif_bytes, name
+        except Exception as e:
+            logger.warning(f"Tenor failed: {e}")
 
-            async with session.get(gif_url) as r:
-                gif_bytes = await r.read()
-                name = f"gif_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
-                return gif_bytes, name
+    # ----- Fallback to Giphy -----
+    if GIPHY_API_KEY:
+        try:
+            url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    obj = await resp.json()
+                    gif_url = obj["data"]["images"]["original"]["url"]
+                    async with session.get(gif_url) as r:
+                        gif_bytes = await r.read()
+                        name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
+                        return gif_bytes, name
+        except Exception as e:
+            logger.warning(f"Giphy failed: {e}")
+
+    # ----- Fallback blank GIF -----
+    return None, None
 
 # -------------------------
 # MAKE EMBED
 # -------------------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.pink() if kind == "join" else discord.Color.dark_grey()
-
     embed = discord.Embed(
         title=title,
         description=desc,
         color=color,
         timestamp=datetime.utcnow()
     )
-
     embed.set_thumbnail(url=member.display_avatar.url)
-
     footer = f"{member.display_name} • {member.id}"
     if count:
         footer += f" • Joins: {count}"
-
     embed.set_footer(text=footer)
     return embed
 
@@ -291,7 +310,6 @@ async def on_ready():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             data.update(json.load(f))
-
     autosave_task.start()
     print(f"✅ Logged in as {bot.user}")
 
@@ -315,46 +333,46 @@ async def on_voice_state_update(member, before, after):
 
         raw_msg = random.choice(JOIN_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
-
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
 
-        gif_bytes, gif_name = await fetch_giphy()
-        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-        embed.set_image(url=f"attachment://{gif_name}")
-
-        # SEND EMBED ONLY, NO MENTION
-        if text_channel:
-            await text_channel.send(embed=embed, file=file)
-
-        # SEND DM
-        try:
-            dm_file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-            await member.send(embed=embed, file=dm_file)
-        except:
-            pass
+        gif_bytes, gif_name = await fetch_gif()
+        if gif_bytes:
+            file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            embed.set_image(url=f"attachment://{gif_name}")
+            if text_channel:
+                await text_channel.send(embed=embed, file=file)
+            try:
+                await member.send(embed=embed, file=file)
+            except: pass
+        else:
+            if text_channel:
+                await text_channel.send(embed=embed)
+            try:
+                await member.send(embed=embed)
+            except: pass
 
     # USER LEAVE
     if before.channel == target_vc and after.channel != target_vc:
         raw_msg = random.choice(LEAVE_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
-
         embed = make_embed("Goodbye!", msg, member, "leave")
 
-        gif_bytes, gif_name = await fetch_giphy()
-        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-        embed.set_image(url=f"attachment://{gif_name}")
-
-        # SEND EMBED ONLY, NO MENTION
-        if text_channel:
-            await text_channel.send(embed=embed, file=file)
-
-        # SEND DM
-        try:
-            dm_file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-            await member.send(embed=embed, file=dm_file)
-        except:
-            pass
+        gif_bytes, gif_name = await fetch_gif()
+        if gif_bytes:
+            file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            embed.set_image(url=f"attachment://{gif_name}")
+            if text_channel:
+                await text_channel.send(embed=embed, file=file)
+            try:
+                await member.send(embed=embed, file=file)
+            except: pass
+        else:
+            if text_channel:
+                await text_channel.send(embed=embed)
+            try:
+                await member.send(embed=embed)
+            except: pass
 
         # DISCONNECT VC IF EMPTY
         if vc and len([m for m in vc.channel.members if not m.bot]) == 0:
