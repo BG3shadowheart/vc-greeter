@@ -303,10 +303,8 @@ def save_data():
 async def fetch_gif(user_id):
     """
     Attempts to fetch a GIF not previously sent to `user_id`.
-    Search order:
-      1) Tenor (if key)
-      2) Giphy (if key)
-      3) Booru public endpoints (Danbooru, Konachan, Yande.re, Gelbooru, Rule34, OtakuGIFs)
+    Search order is randomized per call across providers:
+      Tenor, Giphy, Danbooru, Konachan, Yande.re, Gelbooru, Rule34, OtakuGIFs
     All booru queries use rating:questionable and explicitly exclude illegal tags.
     Returns (gif_bytes, filename, gif_url) or (None, None, None).
     """
@@ -326,201 +324,210 @@ async def fetch_gif(user_id):
         tag_str = " ".join(tags)
         return tag_str, quote_plus(tag_str)
 
-    # create one aiohttp session per fetch to reuse connections
-    async with aiohttp.ClientSession() as session:
-        # try several attempts with different randomized tags to increase chance of fresh content
-        attempts = 4
-        for attempt in range(attempts):
-            positive = get_random_tag()
-            tag_str, tag_query = build_booru_query(positive)
+    # providers list (include Tenor/Giphy only if keys present)
+    providers = []
+    if TENOR_API_KEY:
+        providers.append("tenor")
+    if GIPHY_API_KEY:
+        providers.append("giphy")
+    # always include no-key boorus
+    providers.extend(["danbooru", "konachan", "yandere", "gelbooru", "rule34", "otakugifs"])
+    # shuffle provider order to ensure randomness per call
+    random.shuffle(providers)
 
-            # ---------- TENOR (API key) -----------
-            if TENOR_API_KEY:
-                try:
-                    tenor_q = quote_plus(positive)
-                    tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=20&contentfilter=off"
-                    async with session.get(tenor_url, timeout=10) as resp:
-                        if resp.status == 200:
-                            payload = await resp.json()
-                            results = payload.get("results", [])
-                            random.shuffle(results)
-                            for result in results:
-                                gif_url = None
-                                media_formats = result.get("media_formats") or result.get("media")
-                                if isinstance(media_formats, dict):
-                                    gif_entry = media_formats.get("gif")
-                                    if gif_entry and gif_entry.get("url"):
-                                        gif_url = gif_entry.get("url")
-                                    # fallback to other gif-like fields
-                                    for key in ("nanogif","mediumgif","tinygif"):
-                                        if not gif_url and media_formats.get(key) and media_formats[key].get("url"):
-                                            gif_url = media_formats[key].get("url")
-                                elif isinstance(media_formats, list) and len(media_formats) > 0:
-                                    first = media_formats[0]
-                                    if isinstance(first, dict):
-                                        gif_entry = first.get("gif") or first.get("tinygif")
+    async with aiohttp.ClientSession() as session:
+        # We'll attempt each provider in the shuffled order; for each provider, use 1-2 randomized queries
+        for provider in providers:
+            # pick 1-2 different tags to try for this provider to avoid repeats
+            tries_for_provider = 2
+            for t_try in range(tries_for_provider):
+                positive = get_random_tag()
+                tag_str, tag_query = build_booru_query(positive)
+
+                # ---------- TENOR (API key) -----------
+                if provider == "tenor" and TENOR_API_KEY:
+                    try:
+                        tenor_q = quote_plus(positive)
+                        tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=20&contentfilter=off"
+                        async with session.get(tenor_url, timeout=10) as resp:
+                            if resp.status == 200:
+                                payload = await resp.json()
+                                results = payload.get("results", [])
+                                random.shuffle(results)
+                                for result in results:
+                                    gif_url = None
+                                    media_formats = result.get("media_formats") or result.get("media")
+                                    if isinstance(media_formats, dict):
+                                        gif_entry = media_formats.get("gif")
                                         if gif_entry and gif_entry.get("url"):
                                             gif_url = gif_entry.get("url")
-                                if not gif_url and result.get("itemurl"):
-                                    gif_url = result.get("itemurl")
+                                        # fallback to other gif-like fields
+                                        for key in ("nanogif", "mediumgif", "tinygif"):
+                                            if not gif_url and media_formats.get(key) and media_formats[key].get("url"):
+                                                gif_url = media_formats[key].get("url")
+                                    elif isinstance(media_formats, list) and len(media_formats) > 0:
+                                        first = media_formats[0]
+                                        if isinstance(first, dict):
+                                            gif_entry = first.get("gif") or first.get("tinygif")
+                                            if gif_entry and gif_entry.get("url"):
+                                                gif_url = gif_entry.get("url")
+                                    if not gif_url and result.get("itemurl"):
+                                        gif_url = result.get("itemurl")
 
+                                    if not gif_url:
+                                        continue
+
+                                    gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                                    if gif_hash in used:
+                                        continue
+
+                                    # attempt download
+                                    try:
+                                        async with session.get(gif_url, timeout=15) as gr:
+                                            if gr.status == 200:
+                                                b = await gr.read()
+                                                ext = ".gif"
+                                                ctype = gr.content_type or ""
+                                                if ".webm" in gif_url or "webm" in ctype:
+                                                    ext = ".webm"
+                                                elif ".mp4" in gif_url or "mp4" in ctype:
+                                                    ext = ".mp4"
+                                                name = f"tenor_{gif_hash[:6]}{ext}"
+                                                used.append(gif_hash)
+                                                if len(used) > MAX_USED_GIFS_PER_USER:
+                                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                                save_data()
+                                                return b, name, gif_url
+                                    except Exception as e:
+                                        logger.debug(f"Tenor download error: {e}")
+                    except Exception as e:
+                        logger.debug(f"Tenor search error: {e}")
+
+                # ---------- GIPHY (API key) -----------
+                if provider == "giphy" and GIPHY_API_KEY:
+                    try:
+                        giphy_q = quote_plus(positive)
+                        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=20&rating={GIPHY_RATING}"
+                        async with session.get(giphy_url, timeout=10) as resp:
+                            if resp.status == 200:
+                                payload = await resp.json()
+                                arr = payload.get("data", [])
+                                random.shuffle(arr)
+                                for item in arr:
+                                    images = item.get("images", {})
+                                    gif_url = None
+                                    if images and images.get("original") and images["original"].get("url"):
+                                        gif_url = images["original"].get("url")
+                                    if not gif_url:
+                                        continue
+                                    gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                                    if gif_hash in used:
+                                        continue
+                                    try:
+                                        async with session.get(gif_url, timeout=15) as gr:
+                                            if gr.status == 200:
+                                                b = await gr.read()
+                                                ext = ".gif"
+                                                ctype = gr.content_type or ""
+                                                if ".mp4" in gif_url or "mp4" in ctype:
+                                                    ext = ".mp4"
+                                                elif "webm" in ctype or ".webm" in gif_url:
+                                                    ext = ".webm"
+                                                name = f"giphy_{gif_hash[:6]}{ext}"
+                                                used.append(gif_hash)
+                                                if len(used) > MAX_USED_GIFS_PER_USER:
+                                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                                save_data()
+                                                return b, name, gif_url
+                                    except Exception as e:
+                                        logger.debug(f"Giphy download error: {e}")
+                    except Exception as e:
+                        logger.debug(f"Giphy search error: {e}")
+
+                # ---------- BOORU FALLBACKS (no key required) -----------
+                if provider in ("danbooru", "konachan", "yandere", "gelbooru", "rule34", "otakugifs"):
+                    booru_endpoints_map = {
+                        "danbooru": f"https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
+                        "konachan": f"https://konachan.com/post.json?tags={tag_query}&limit=50",
+                        "yandere": f"https://yande.re/post.json?tags={tag_query}&limit=50",
+                        "gelbooru": f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
+                        "rule34": f"https://rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
+                        "otakugifs": f"https://otakugifs.xyz/api/gif?reaction={quote_plus(positive)}"
+                    }
+                    url = booru_endpoints_map.get(provider)
+                    if not url:
+                        continue
+                    try:
+                        async with session.get(url, timeout=12) as resp:
+                            if resp.status != 200:
+                                continue
+                            posts = await resp.json()
+                            # normalize: some endpoints return dict with 'posts' key
+                            if isinstance(posts, dict) and "posts" in posts:
+                                posts = posts["posts"]
+                            if not posts:
+                                continue
+                            random.shuffle(posts)
+                            for post in posts:
+                                # Many boorus provide 'file_url' or 'large_file_url' or 'image' etc.
+                                gif_url = None
+                                for fkey in ("file_url", "large_file_url", "image_url", "jpeg_url", "source", "file", "image", "url", "preview_url"):
+                                    v = post.get(fkey)
+                                    if v:
+                                        gif_url = v
+                                        break
                                 if not gif_url:
                                     continue
 
+                                # Defensive: ensure rating is not explicit
+                                rating = post.get("rating") or post.get("rating")
+                                if isinstance(rating, str):
+                                    if rating.lower().startswith("e"):  # explicit -> skip
+                                        continue
+                                # Skip items whose tag strings explicitly include 'rating:explicit' or explicit marker
+                                tags_field = ""
+                                if isinstance(post.get("tag_string"), str):
+                                    tags_field = post.get("tag_string")
+                                if isinstance(post.get("tags"), str) and not tags_field:
+                                    tags_field = post.get("tags")
+                                if "rating:explicit" in (tags_field or ""):
+                                    continue
+                                # Ensure blacklist not in tags
+                                if any(ex in (tags_field or "") for ex in EXCLUDE_TAGS):
+                                    continue
+
+                                # avoid duplicates
                                 gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
                                 if gif_hash in used:
                                     continue
 
-                                # attempt download
+                                # try download
                                 try:
                                     async with session.get(gif_url, timeout=15) as gr:
                                         if gr.status == 200:
                                             b = await gr.read()
-                                            ext = ".gif"
                                             ctype = gr.content_type or ""
+                                            ext = ".gif"
                                             if ".webm" in gif_url or "webm" in ctype:
                                                 ext = ".webm"
                                             elif ".mp4" in gif_url or "mp4" in ctype:
                                                 ext = ".mp4"
-                                            name = f"tenor_{gif_hash[:6]}{ext}"
+                                            elif ".png" in gif_url or "png" in ctype:
+                                                ext = ".png"
+                                            elif ".jpg" in gif_url or "jpeg" in gif_url or "jpeg" in ctype:
+                                                ext = ".jpg"
+                                            name = f"{provider.lower()}_{gif_hash[:6]}{ext}"
                                             used.append(gif_hash)
                                             if len(used) > MAX_USED_GIFS_PER_USER:
                                                 del used[:len(used) - MAX_USED_GIFS_PER_USER]
                                             save_data()
                                             return b, name, gif_url
                                 except Exception as e:
-                                    logger.debug(f"Tenor download error: {e}")
-                except Exception as e:
-                    logger.debug(f"Tenor search error (attempt {attempt}): {e}")
+                                    logger.debug(f"{provider} media download error: {e}")
+                    except Exception as e:
+                        logger.debug(f"{provider} query error: {e}")
 
-            # ---------- GIPHY (API key) -----------
-            if GIPHY_API_KEY:
-                try:
-                    giphy_q = quote_plus(positive)
-                    giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=20&rating={GIPHY_RATING}"
-                    async with session.get(giphy_url, timeout=10) as resp:
-                        if resp.status == 200:
-                            payload = await resp.json()
-                            arr = payload.get("data", [])
-                            random.shuffle(arr)
-                            for item in arr:
-                                images = item.get("images", {})
-                                gif_url = None
-                                if images and images.get("original") and images["original"].get("url"):
-                                    gif_url = images["original"].get("url")
-                                if not gif_url:
-                                    continue
-                                gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                                if gif_hash in used:
-                                    continue
-                                try:
-                                    async with session.get(gif_url, timeout=15) as gr:
-                                        if gr.status == 200:
-                                            b = await gr.read()
-                                            ext = ".gif"
-                                            ctype = gr.content_type or ""
-                                            if ".mp4" in gif_url or "mp4" in ctype:
-                                                ext = ".mp4"
-                                            elif "webm" in ctype or ".webm" in gif_url:
-                                                ext = ".webm"
-                                            name = f"giphy_{gif_hash[:6]}{ext}"
-                                            used.append(gif_hash)
-                                            if len(used) > MAX_USED_GIFS_PER_USER:
-                                                del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                            save_data()
-                                            return b, name, gif_url
-                                except Exception as e:
-                                    logger.debug(f"Giphy download error: {e}")
-                except Exception as e:
-                    logger.debug(f"Giphy search error (attempt {attempt}): {e}")
-
-            # ---------- BOORU FALLBACKS (no key required) -----------
-            # Endpoints and their JSON patterns. We build queries using rating:questionable + excludes
-            booru_endpoints = [
-                ("Danbooru", f"https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50"),
-                ("Konachan", f"https://konachan.com/post.json?tags={tag_query}&limit=50"),
-                ("Yandere", f"https://yande.re/post.json?tags={tag_query}&limit=50"),
-                ("Gelbooru", f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"),
-                ("Rule34", f"https://rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"),
-                ("OtakuGIFs", f"https://otakugifs.xyz/api/gif?reaction={quote_plus(positive)}"),  # if present on service
-            ]
-
-            for name, url in booru_endpoints:
-                try:
-                    async with session.get(url, timeout=10) as resp:
-                        if resp.status != 200:
-                            continue
-                        posts = await resp.json()
-                        # normalize: some endpoints return dict with 'posts' key
-                        if isinstance(posts, dict) and "posts" in posts:
-                            posts = posts["posts"]
-                        if not posts:
-                            continue
-                        random.shuffle(posts)
-                        for post in posts:
-                            # Many boorus provide 'file_url' or 'large_file_url' or 'image' etc.
-                            gif_url = None
-                            for fkey in ("file_url", "large_file_url", "image_url", "jpeg_url", "source", "file"):
-                                v = post.get(fkey)
-                                if v:
-                                    gif_url = v
-                                    break
-                            # some endpoints (Gelbooru) use 'image' or 'preview_url' keys:
-                            if not gif_url:
-                                gif_url = post.get("image") or post.get("preview_url") or post.get("url")
-                            if not gif_url:
-                                continue
-
-                            # Defensive: ensure rating is not explicit
-                            rating = post.get("rating") or post.get("rating")  # many return 'rating' as s/q/e or 's','q','e'
-                            if isinstance(rating, str):
-                                if rating.lower().startswith("e"):  # explicit -> skip
-                                    continue
-                            # Skip items whose tag strings explicitly include 'rating:explicit' or explicit marker
-                            tags_field = ""
-                            if isinstance(post.get("tag_string"), str):
-                                tags_field = post.get("tag_string")
-                            if isinstance(post.get("tags"), str) and not tags_field:
-                                tags_field = post.get("tags")
-                            if "rating:explicit" in (tags_field or ""):
-                                continue
-                            # Ensure blacklist not in tags
-                            if any(ex in (tags_field or "") for ex in EXCLUDE_TAGS):
-                                continue
-
-                            # avoid duplicates
-                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                            if gif_hash in used:
-                                continue
-
-                            # try download
-                            try:
-                                async with session.get(gif_url, timeout=15) as gr:
-                                    if gr.status == 200:
-                                        b = await gr.read()
-                                        ctype = gr.content_type or ""
-                                        ext = ".gif"
-                                        if ".webm" in gif_url or "webm" in ctype:
-                                            ext = ".webm"
-                                        elif ".mp4" in gif_url or "mp4" in ctype:
-                                            ext = ".mp4"
-                                        elif ".png" in gif_url or "png" in ctype:
-                                            ext = ".png"
-                                        elif ".jpg" in gif_url or "jpeg" in gif_url or "jpeg" in ctype:
-                                            ext = ".jpg"
-                                        name = f"{name.lower()}_{gif_hash[:6]}{ext}"
-                                        used.append(gif_hash)
-                                        if len(used) > MAX_USED_GIFS_PER_USER:
-                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                        save_data()
-                                        return b, name, gif_url
-                            except Exception as e:
-                                logger.debug(f"{name} media download error: {e}")
-                except Exception as e:
-                    logger.debug(f"{name} query error: {e}")
-
-        # end attempts loop
-
+        # if here, no provider produced a fresh gif for this user this call
     # nothing found
     return None, None, None
 
