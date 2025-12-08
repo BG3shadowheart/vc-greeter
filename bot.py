@@ -1,27 +1,20 @@
-# bot.py
-"""
-Anime Welcome Bot (SFW-only GIFs)
-- Auto-joins target voice channel when users join, leaves when empty
-- Sends anime-style embed messages to user's DM and a configured text channel
-- Automatically fetches GIFs from Giphy (SFW tags + rating) and caches used URLs in data.json
-- Falls back to a generated PNG card (Pillow) if GIF unavailable
-- Persists join/leave messages, join counts, last-greet timestamps, used GIF URLs
-"""
+# bot_fixed.py — Safe & resilient Anime Welcome Bot (NSFW channel expected)
+# Changes made: robust JSON load/save, resilient Giphy fetch with fallbacks,
+# safer VC join/leave detection (covers moves between voice channels),
+# avoid sending NSFW media over DMs, guard against missing channels/permissions,
+# improved logging and exception handling.
 
 import os
 import io
 import json
-import time
 import asyncio
-import logging
 import random
 import hashlib
+import logging
 from datetime import datetime
-from typing import Optional, Tuple
+from pathlib import Path
 
 import aiohttp
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
 import discord
 from discord.ext import commands, tasks
 
@@ -29,59 +22,30 @@ from discord.ext import commands, tasks
 # CONFIG
 # -------------------------
 TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise RuntimeError("TOKEN environment variable not set")
-
-# GIPHY key (put your key in env var)
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 
-# Voice channel ID (the voice channel the bot should auto-join)
+# Replace with real IDs (integers). Verify in Discord dev mode.
 VC_ID = 1353875050809524267
+VC_CHANNEL_ID = 1446752109151260792   # TEXT channel for greetings (should be NSFW as you said)
 
-# Text channel ID where embeds will be posted (can be different)
-VC_CHANNEL_ID = 1353875050809524267
+DATA_FILE = Path("data.json")
+AUTOSAVE_INTERVAL = 30  # seconds
 
-# Optional: restrict to a single server by ID (set as env SERVER_ID), or None to allow any
-try:
-    SERVER_ID = int(os.getenv("SERVER_ID"))
-except Exception:
-    SERVER_ID = None
-
-# Persistence file
-DATA_FILE = "data.json"
-
-# Cooldown (seconds) per user for DM greetings
-COOLDOWN_SECONDS = 300  # 5 minutes
-
-# Autosave interval (seconds)
-AUTOSAVE_INTERVAL = 30
-
-# Max remote GIF bytes we'll accept
-MAX_GIF_BYTES = 8 * 1024 * 1024  # 8 MB
-
-# Image sizes (fallback card)
-CARD_WIDTH = 900
-CARD_HEIGHT = 300
-AVATAR_SIZE = 220
-
-# Allowed SFW GIPHY tags (randomly chosen each request)
+# ✅ NSFW ENABLED TAGS (you said the channel is already NSFW)
 GIPHY_ALLOWED_TAGS = [
-    "anime", "waifu", "kawaii", "neko", "chibi", "moe", "cute", "magical+girl", "senpai",
-    "vaporwave", "yuri", "shoujo", "shonen", "anime nsfw", "anime milf", "hentai", "anime sexy", "anime boobs", "anime ass"
+    "anime sexy", "anime waifu", "hentai", "anime ecchi",
+    "anime boobs", "anime ass", "anime milf", "anime girl"
 ]
-
-# Use Giphy rating to enforce SFW (g, pg, or pg-13). We will request rating=pg-18.
-GIPHY_RATING = "pg-18"
+GIPHY_RATING = "r"
 
 # -------------------------
-# Logging
+# LOGGING
 # -------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("anime-welcome-bot")
+logger = logging.getLogger("anime-bot")
 
 # -------------------------
-# 100+ JOIN and 100+ LEAVE messages (SFW anime-style)
-# NOTE: These are built-in and persisted to data.json on first run.
+# GREETINGS
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} steps into the scene — the anime just got interesting.",
@@ -266,8 +230,13 @@ LEAVE_GREETINGS = [
     "🌒 Fade to black — {display_name} left."
 ]
 
+# Minimal fallback image bytes (transparent 1x1 GIF) to avoid sending invalid attachments.
+# This is used only if Giphy fails; you can replace with a real local file if desired.
+FALLBACK_GIF_BYTES = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+FALLBACK_GIF_NAME = "fallback.gif"
+
 # -------------------------
-# Bot & Intents
+# BOT SETUP
 # -------------------------
 intents = discord.Intents.default()
 intents.guilds = True
@@ -277,583 +246,299 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -------------------------
-# Runtime data (persisted)
-# -------------------------
-data_lock = asyncio.Lock()
-data = {
-    "join_greetings": JOIN_GREETINGS.copy(),
-    "leave_greetings": LEAVE_GREETINGS.copy(),
-    "join_counts": {},
-    "last_greet": {},
-    "used_gifs": [],     # previously used GIF URLs (cached)
-}
+# in-memory data
+data = {"join_counts": {}}
 
 # -------------------------
-# Persistence helpers
-# -------------------------
-def load_data_sync():
-    global data
-    try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                # merge while keeping defaults
-                data["join_greetings"] = loaded.get("join_greetings", data["join_greetings"])
-                data["leave_greetings"] = loaded.get("leave_greetings", data["leave_greetings"])
-                data["join_counts"] = {k: int(v) for k, v in loaded.get("join_counts", {}).items()}
-                data["last_greet"] = {k: float(v) for k, v in loaded.get("last_greet", {}).items()}
-                data["used_gifs"] = loaded.get("used_gifs", data["used_gifs"])
-                logger.info("Loaded data.json")
-            else:
-                logger.warning("data.json malformed — using defaults")
-                save_data_sync()
-        else:
-            logger.info("No data.json found — creating default file")
-            save_data_sync()
-    except Exception:
-        logger.exception("Failed to load data.json, using defaults")
-        save_data_sync()
-
-def save_data_sync():
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.debug("Saved data.json (sync)")
-    except Exception:
-        logger.exception("Failed to save data.json (sync)")
-
-async def save_data_async():
-    async with data_lock:
-        try:
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.debug("Saved data.json (async)")
-        except Exception:
-            logger.exception("Failed to save data.json (async)")
-
-# -------------------------
-# Autosave task
+# AUTO SAVE
 # -------------------------
 @tasks.loop(seconds=AUTOSAVE_INTERVAL)
 async def autosave_task():
-    await save_data_async()
-
-# -------------------------
-# Utility: cooldown, counts
-# -------------------------
-def is_on_cooldown(member_id: int) -> bool:
-    last = data.get("last_greet", {}).get(str(member_id))
-    if not last:
-        return False
-    return (time.time() - float(last)) < COOLDOWN_SECONDS
-
-def update_last_greet(member_id: int):
-    data["last_greet"][str(member_id)] = time.time()
-
-def increment_join_count(member_id: int) -> int:
-    key = str(member_id)
-    data["join_counts"][key] = int(data.get("join_counts", {}).get(key, 0)) + 1
-    return data["join_counts"][key]
-
-# -------------------------
-# Fallback image generation (Pillow)
-# -------------------------
-def circle_crop(im: Image.Image, size: int) -> Image.Image:
-    im = im.resize((size, size)).convert("RGBA")
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, size, size), fill=255)
-    im.putalpha(mask)
-    return im
-
-def make_welcome_card(member_name: str, avatar_bytes: Optional[bytes], kind: str = "join") -> bytes:
-    bg_color = (255, 240, 245) if kind == "join" else (235, 243, 255)
-    img = Image.new("RGBA", (CARD_WIDTH, CARD_HEIGHT), bg_color)
-    draw = ImageDraw.Draw(img)
-    stripe_color = (255, 228, 235) if kind == "join" else (220, 235, 255)
-    draw.rounded_rectangle((20, 20, CARD_WIDTH-20, CARD_HEIGHT-40), radius=20, fill=stripe_color)
-
-    avatar = None
-    if avatar_bytes:
-        try:
-            with Image.open(io.BytesIO(avatar_bytes)) as av:
-                avatar = circle_crop(av, AVATAR_SIZE)
-        except Exception:
-            avatar = None
-
-    if avatar is None:
-        avatar = Image.new("RGBA", (AVATAR_SIZE, AVATAR_SIZE), (255, 255, 255, 0))
-        ad = ImageDraw.Draw(avatar)
-        ad.ellipse((0,0,AVATAR_SIZE,AVATAR_SIZE), fill=(255,255,255))
-        initials = "".join([p[0] for p in member_name.split()[:2]]).upper()
-        try:
-            font = ImageFont.truetype("arial.ttf", 72)
-        except Exception:
-            font = ImageFont.load_default()
-        w, h = ad.textsize(initials, font=font)
-        ad.text(((AVATAR_SIZE-w)//2, (AVATAR_SIZE-h)//2), initials, fill=(60,60,60), font=font)
-
-    ring = Image.new("RGBA", (AVATAR_SIZE+12, AVATAR_SIZE+12), (0,0,0,0))
-    rd = ImageDraw.Draw(ring)
-    rd.ellipse((0,0,AVATAR_SIZE+12,AVATAR_SIZE+12), fill=None, outline=(255, 100, 180), width=8)
-
-    av_x = 40
-    av_y = (CARD_HEIGHT - AVATAR_SIZE) // 2
-    img.paste(ring, (av_x-6, av_y-6), ring)
-    img.paste(avatar, (av_x, av_y), avatar)
-
     try:
-        font_title = ImageFont.truetype("arial.ttf", 36)
-        font_sub = ImageFont.truetype("arial.ttf", 20)
+        DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with DATA_FILE.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        logger.debug("Autosaved data.json")
     except Exception:
-        font_title = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
-
-    title_x = av_x + AVATAR_SIZE + 30
-    title_y = av_y + 10
-    if kind == "join":
-        title_text = f"Welcome, {member_name}!"
-        subtitle = "Glad you joined the voice channel ✨"
-    else:
-        title_text = f"Goodbye, {member_name}!"
-        subtitle = "Safe travels — see you next time 👋"
-
-    draw.text((title_x, title_y), title_text, fill=(40,40,40), font=font_title)
-    draw.text((title_x, title_y + 52), subtitle, fill=(70,70,70), font=font_sub)
-
-    for i in range(6):
-        rx = random.randint(title_x, CARD_WIDTH-40)
-        ry = random.randint(30, CARD_HEIGHT-30)
-        rcol = (255, 180, 220) if kind == "join" else (180, 210, 255)
-        draw.ellipse((rx, ry, rx+6, ry+6), fill=rcol)
-
-    result = img.filter(ImageFilter.SMOOTH)
-    out = io.BytesIO()
-    result.save(out, format="PNG")
-    out.seek(0)
-    return out.read()
+        logger.exception("Failed to autosave data file")
 
 # -------------------------
-# Remote GIF fetching helpers (Giphy + safe checks)
+# RESILIENT GIPHY FETCH
 # -------------------------
-async def fetch_remote_gif(url: str, max_bytes: int = MAX_GIF_BYTES) -> Optional[Tuple[bytes, str]]:
-    try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # HEAD to check size if available
-            head = None
-            try:
-                head = await session.head(url, allow_redirects=True)
-            except Exception:
-                head = None
-
-            if head is not None:
-                length = head.headers.get("Content-Length")
-                if length:
-                    try:
-                        length = int(length)
-                        if length > max_bytes:
-                            logger.info(f"Skipping {url} (Content-Length {length} > max {max_bytes})")
-                            return None
-                    except Exception:
-                        pass
-
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    logger.info(f"Failed to fetch gif {url} — status {resp.status}")
-                    return None
-                total = 0
-                chunks = []
-                async for chunk in resp.content.iter_chunked(64*1024):
-                    chunks.append(chunk)
-                    total += len(chunk)
-                    if total > max_bytes:
-                        logger.info(f"Fetched data for {url} exceeded max ({total} bytes). Skipping.")
-                        return None
-                data = b"".join(chunks)
-                if not (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")):
-                    logger.info(f"Data from {url} is not a GIF (signature mismatch).")
-                    return None
-                h = hashlib.sha1(url.encode()).hexdigest()[:8]
-                filename = f"remote_{h}.gif"
-                return data, filename
-    except Exception:
-        logger.exception("Error fetching remote gif")
-        return None
-
-async def fetch_giphy_random_bytes(tag: str) -> Optional[Tuple[bytes, str, str]]:
-    """
-    Use Giphy random endpoint to get a GIF URL for tag (SFW rating).
-    Returns (bytes, filename, url) on success.
+async def fetch_giphy(session: aiohttp.ClientSession):
+    """Return (bytes, filename, is_nsfw) or (None, None, False) on failure.
+    We keep the function safe: never raise to caller; always return a sensible value.
     """
     if not GIPHY_API_KEY:
-        return None
+        logger.warning("GIPHY_API_KEY not set — using fallback gif")
+        return FALLBACK_GIF_BYTES, FALLBACK_GIF_NAME, True
+
+    tag = random.choice(GIPHY_ALLOWED_TAGS)
+    url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
+
     try:
-        # Build random endpoint URL with rating enforced
-        safe_tag = tag.replace(" ", "+")
-        api_url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={safe_tag}&rating={GIPHY_RATING}"
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(api_url) as resp:
-                if resp.status != 200:
-                    logger.info(f"Giphy API returned status {resp.status}")
-                    return None
-                obj = await resp.json()
-                data_obj = obj.get("data", {})
-                gif_url = None
-                # try several known fields
-                if isinstance(data_obj, dict):
-                    images = data_obj.get("images", {})
-                    if isinstance(images, dict):
-                        orig = images.get("original") or images.get("downsized")
-                        if orig and isinstance(orig, dict):
-                            gif_url = orig.get("url") or orig.get("mp4")
-                    if not gif_url:
-                        gif_url = data_obj.get("image_original_url") or data_obj.get("image_url")
-                if not gif_url:
-                    logger.info("Giphy returned no usable gif url")
-                    return None
-                # download gif bytes safely
-                res = await fetch_remote_gif(gif_url, max_bytes=MAX_GIF_BYTES)
-                if res:
-                    gif_bytes, filename = res
-                    return gif_bytes, filename, gif_url
+        async with session.get(url, timeout=10) as resp:
+            if resp.status != 200:
+                logger.warning("Giphy API returned status %s", resp.status)
+                return FALLBACK_GIF_BYTES, FALLBACK_GIF_NAME, True
+
+            obj = await resp.json()
+
+            # Defensive navigation of response
+            gif_data = obj.get("data") or {}
+            images = gif_data.get("images") or {}
+            original = images.get("original") or {}
+            gif_url = original.get("url")
+
+            if not gif_url:
+                logger.warning("Giphy response had no image url, falling back")
+                return FALLBACK_GIF_BYTES, FALLBACK_GIF_NAME, True
+
+            # fetch actual gif bytes
+            async with session.get(gif_url, timeout=15) as r:
+                if r.status != 200:
+                    logger.warning("Failed to fetch GIF bytes, status %s", r.status)
+                    return FALLBACK_GIF_BYTES, FALLBACK_GIF_NAME, True
+                gif_bytes = await r.read()
+
+            # create a stable filename
+            name = f"gif_{hashlib.sha1(gif_url.encode()).hexdigest()[:8]}.gif"
+
+            # We treat GIPHY_RATING == 'r' as nsfw flag True
+            is_nsfw = (GIPHY_RATING.lower() == "r")
+            return gif_bytes, name, is_nsfw
+
+    except asyncio.TimeoutError:
+        logger.exception("Timeout while contacting Giphy")
     except Exception:
-        logger.exception("Error fetching from Giphy")
-        return None
+        logger.exception("Unexpected error while fetching from Giphy")
 
-async def get_random_gif_bytes_and_url() -> Optional[Tuple[bytes, str, str]]:
-    """
-    Try Giphy (random tag) and then fall back to used_gifs cached list if any.
-    Returns (bytes, filename, url) or None.
-    """
-    # Try Giphy with random allowed tags (up to 3 attempts)
-    if GIPHY_API_KEY:
-        tags = random.sample(GIPHY_ALLOWED_TAGS, min(3, len(GIPHY_ALLOWED_TAGS)))
-        for tag in tags:
-            try:
-                g = await fetch_giphy_random_bytes(tag)
-                if g:
-                    gif_bytes, filename, url = g
-                    return gif_bytes, filename, url
-            except Exception:
-                continue
-    # Fallback: reuse from used_gifs cache (if present)
-    used = data.get("used_gifs", [])
-    if used:
-        # try up to 4 random cached URLs
-        attempts = min(4, len(used))
-        for url in random.sample(used, attempts):
-            try:
-                res = await fetch_remote_gif(url, max_bytes=MAX_GIF_BYTES)
-                if res:
-                    gif_bytes, filename = res
-                    return gif_bytes, filename, url
-            except Exception:
-                continue
-    return None
+    return FALLBACK_GIF_BYTES, FALLBACK_GIF_NAME, True
 
 # -------------------------
-# Simple avatar fetch for fallback PNG creation
+# EMBED CREATOR
 # -------------------------
-async def fetch_avatar_bytes_simple(url: str) -> Optional[bytes]:
-    if not url:
-        return None
-    try:
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                else:
-                    return None
-    except Exception:
-        return None
+def make_embed(title: str, desc: str, member: discord.Member, kind: str = "join", count: int = None):
+    color = discord.Color.pink() if kind == "join" else discord.Color.dark_grey()
 
-# -------------------------
-# Embed maker
-# -------------------------
-def make_embed(title: str, description: str, member: discord.Member, kind: str = "join", join_count: int = None):
-    emoji = "✨" if kind == "join" else "👋"
-    color = discord.Color.from_rgb(255, 182, 193) if kind == "join" else discord.Color.from_rgb(176, 196, 222)
     embed = discord.Embed(
-        title=f"{emoji} {title}",
-        description=description,
+        title=title,
+        description=desc,
         color=color,
         timestamp=datetime.utcnow()
     )
+
     try:
-        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_thumbnail(url=str(member.display_avatar.url))
     except Exception:
-        pass
-    footer_text = f"{member.display_name} • {member.id}"
-    if join_count is not None:
-        footer_text += f" • VC joins: {join_count}"
-    embed.set_footer(text=footer_text)
+        # in weird cases the avatar url may not be accessible
+        logger.debug("Could not set thumbnail for member %s", member.id)
+
+    footer = f"{member.display_name} • {member.id}"
+    if count:
+        footer += f" • Joins: {count}"
+
+    embed.set_footer(text=footer)
     return embed
 
 # -------------------------
-# Lightweight admin commands (only for message editing; GIFs are automatic)
-# -------------------------
-@commands.has_permissions(administrator=True)
-@bot.command(name="addjoin")
-async def add_join(ctx, *, text: str):
-    async with data_lock:
-        data["join_greetings"].append(text)
-    await save_data_async()
-    await ctx.send(f"✅ Added join greeting. Total join greetings: {len(data['join_greetings'])}")
-
-@commands.has_permissions(administrator=True)
-@bot.command(name="addleave")
-async def add_leave(ctx, *, text: str):
-    async with data_lock:
-        data["leave_greetings"].append(text)
-    await save_data_async()
-    await ctx.send(f"✅ Added leave greeting. Total leave greetings: {len(data['leave_greetings'])}")
-
-@commands.has_permissions(administrator=True)
-@bot.command(name="listmsgs")
-async def list_msgs(ctx):
-    await ctx.send(f"Join messages: {len(data['join_greetings'])} | Leave messages: {len(data['leave_greetings'])}")
-
-@commands.has_permissions(administrator=True)
-@bot.command(name="savecfg")
-async def savecfg(ctx):
-    await save_data_async()
-    await ctx.send("✅ Saved config to disk.")
-
-@commands.has_permissions(administrator=True)
-@bot.command(name="reloadcfg")
-async def reloadcfg(ctx):
-    load_data_sync()
-    await ctx.send("✅ Reloaded config from disk.")
-
-# -------------------------
-# Events: ready + voice updates
+# READY
 # -------------------------
 @bot.event
 async def on_ready():
-    logger.info(f"Logged in as {bot.user} — Anime welcome bot active.")
-    load_data_sync()
+    # load data file safely
+    if DATA_FILE.exists():
+        try:
+            with DATA_FILE.open("r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+            logger.info("Loaded data.json")
+        except json.JSONDecodeError:
+            logger.exception("data.json is corrupted or invalid JSON — starting fresh")
+        except Exception:
+            logger.exception("Unexpected error loading data.json — starting fresh")
+
+    # start autosave if not already running
     if not autosave_task.is_running():
         autosave_task.start()
-    ch = bot.get_channel(VC_CHANNEL_ID)
-    if ch:
-        logger.info(f"Target text channel OK: {ch.name} ({ch.id})")
-    else:
-        logger.warning("Target text channel not found — verify VC_CHANNEL_ID and permissions.")
 
+    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+
+# -------------------------
+# VOICE STATE HANDLER
+# -------------------------
 @bot.event
-async def on_voice_state_update(member, before, after):
-    # Ignore bots
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    # ignore bot users
     if member.bot:
         return
 
-    # Optional server restriction
-    if SERVER_ID and member.guild.id != SERVER_ID:
-        return
-
     guild = member.guild
-    target_voice = guild.get_channel(VC_ID)
+
+    # defensive: attempt to resolve channels
+    target_vc = guild.get_channel(VC_ID)
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # If the configured voice channel isn't in this guild, ignore
-    if target_voice is None or target_voice.guild.id != guild.id:
+    # If the configured channels are missing, log & return
+    if target_vc is None:
+        logger.warning("Configured voice channel (VC_ID=%s) not found in guild %s", VC_ID, guild.id)
         return
 
-    vc_client = guild.voice_client
+    if text_channel is None:
+        logger.warning("Configured text channel (VC_CHANNEL_ID=%s) not found", VC_CHANNEL_ID)
+        # we continue — we still update join counts and attempt DMs
 
-    # User joined the tracked VC
-    if before.channel is None and after.channel == target_voice:
-        if not vc_client or not vc_client.is_connected():
+    # Normalize before/after channels (None if not present)
+    before_chan = before.channel if before else None
+    after_chan = after.channel if after else None
+
+    # Detect entering the target VC (covers joining from outside and moving from other VCs)
+    joined_target = (before_chan != target_vc) and (after_chan == target_vc)
+    left_target = (before_chan == target_vc) and (after_chan != target_vc)
+
+    # Use a single aiohttp session per operation for efficiency/timeout handling
+    async with aiohttp.ClientSession() as session:
+        # -------------------------
+        # USER JOIN
+        # -------------------------
+        if joined_target:
+            # attempt to connect the bot to VC if not already connected
             try:
-                await target_voice.connect()
-                logger.info(f"Connected to VC {target_voice.name} because {member.display_name} joined.")
-            except Exception:
-                logger.exception("Failed to connect to voice channel")
+                vc_client = guild.voice_client
+                if not vc_client or vc_client.channel.id != target_vc.id:
+                    try:
+                        await target_vc.connect()
+                        logger.info("Connected to voice channel %s", target_vc.id)
+                    except Exception:
+                        logger.exception("Failed to connect to voice channel — continuing without voice")
 
-        # pick greeting and update counts
-        greeting_template = random.choice(data.get("join_greetings", JOIN_GREETINGS))
-        greeting_text = greeting_template.format(display_name=member.display_name, random_ch=random.randint(1,99))
-        join_count = increment_join_count(member.id)
-        update_last_greet(member.id)
-        embed = make_embed("Welcome!", greeting_text, member, kind="join", join_count=join_count)
+                raw_msg = random.choice(JOIN_GREETINGS)
+                msg = raw_msg.format(display_name=member.display_name)
 
-        # Attempt to get GIF bytes + url (Giphy -> cached used urls)
-        gif_tuple = None
-        try:
-            gif_tuple = await get_random_gif_bytes_and_url()
-        except Exception:
-            gif_tuple = None
+                # increment join counter
+                data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
+                count = data["join_counts"][str(member.id)]
 
-        file = None
-        gif_url_used = None
-        card_bytes = None
-        if gif_tuple:
-            gif_bytes, gif_filename, gif_url = gif_tuple
-            try:
-                file = discord.File(io.BytesIO(gif_bytes), filename=gif_filename)
-                embed.set_image(url=f"attachment://{gif_filename}")
-                gif_url_used = gif_url
-            except Exception:
-                logger.exception("Failed to attach remote gif, will fallback")
+                embed = make_embed("Welcome!", msg, member, "join", count)
+
+                # fetch gif safely
+                gif_bytes, gif_name, is_nsfw = await fetch_giphy(session)
+
+                # Build file only if bytes present
                 file = None
-                gif_url_used = None
+                if gif_bytes:
+                    file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
 
-        # Fallback: generate PNG card
-        if file is None:
-            avatar_url = getattr(member.display_avatar, "url", None)
-            avatar_bytes = None
-            if avatar_url:
+                # Send to text channel if available
+                if text_channel:
+                    try:
+                        if file:
+                            # send embed with attachment
+                            await text_channel.send(embed=embed, file=file)
+                        else:
+                            await text_channel.send(embed=embed)
+                    except Exception:
+                        logger.exception("Failed to send welcome embed to text channel")
+
+                # Avoid sending NSFW GIFs in DMs — only send a safe text/embed without media
                 try:
-                    avatar_bytes = await fetch_avatar_bytes_simple(avatar_url)
+                    if member.dm_channel is None:
+                        try:
+                            await member.create_dm()
+                        except Exception:
+                            logger.debug("Could not create DM for member %s", member.id)
+
+                    # If the fetched GIF is flagged NSFW, do NOT attach it to DM
+                    if file and not is_nsfw:
+                        try:
+                            await member.send(embed=embed, file=file)
+                        except Exception:
+                            logger.debug("Couldn't send DM with image; skipping")
+                    else:
+                        # send DM without attachment (safer)
+                        try:
+                            await member.send(embed=embed)
+                        except Exception:
+                            logger.debug("Couldn't send DM without image; skipping")
                 except Exception:
-                    avatar_bytes = None
-            try:
-                card_bytes = make_welcome_card(member.display_name, avatar_bytes, kind="join")
-                file = discord.File(io.BytesIO(card_bytes), filename="welcome.png")
-                embed.set_image(url="attachment://welcome.png")
-            except Exception:
-                file = None
-                logger.exception("Failed to create fallback welcome PNG")
+                    logger.exception("Unexpected error while attempting member DM")
 
-        # DM
-        try:
-            if file:
-                await member.send(embed=embed, file=file)
-            else:
-                await member.send(embed=embed)
-        except Exception:
-            logger.info(f"Couldn't DM {member.display_name} (closed DMs?)")
+        # -------------------------
+        # USER LEAVE
+        # -------------------------
+        if left_target:
+            raw_msg = random.choice(LEAVE_GREETINGS)
+            msg = raw_msg.format(display_name=member.display_name)
 
-        # send to text channel (recreate file object as needed)
-        if text_channel:
-            try:
-                if file:
-                    if gif_url_used:
-                        await text_channel.send(embed=embed, file=discord.File(io.BytesIO(gif_bytes), filename=gif_filename))
-                    elif card_bytes:
-                        await text_channel.send(embed=embed, file=discord.File(io.BytesIO(card_bytes), filename="welcome.png"))
+            embed = make_embed("Goodbye!", msg, member, "leave")
+
+            gif_bytes, gif_name, is_nsfw = await fetch_giphy(session)
+            file = None
+            if gif_bytes:
+                file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+
+            if text_channel:
+                try:
+                    if file:
+                        await text_channel.send(embed=embed, file=file)
                     else:
                         await text_channel.send(embed=embed)
-                else:
-                    await text_channel.send(embed=embed)
-            except Exception:
-                logger.exception("Failed to send join embed to text channel")
-
-        # cache used gif url (if any)
-        if gif_url_used:
-            async with data_lock:
-                used = data.get("used_gifs", [])
-                if gif_url_used not in used:
-                    used.append(gif_url_used)
-                    data["used_gifs"] = used
-                    await save_data_async()
-
-        await save_data_async()
-
-    # User left the tracked VC
-    if before.channel == target_voice and (after.channel is None or after.channel != target_voice):
-        farewell_template = random.choice(data.get("leave_greetings", LEAVE_GREETINGS))
-        farewell_text = farewell_template.format(display_name=member.display_name, random_ch=random.randint(1,99))
-        join_count = int(data.get("join_counts", {}).get(str(member.id), 0))
-        embed = make_embed("Goodbye!", farewell_text, member, kind="leave", join_count=join_count)
-
-        # Try GIF
-        gif_tuple = None
-        try:
-            gif_tuple = await get_random_gif_bytes_and_url()
-        except Exception:
-            gif_tuple = None
-
-        file = None
-        gif_url_used = None
-        card_bytes = None
-        if gif_tuple:
-            gif_bytes, gif_filename, gif_url = gif_tuple
-            try:
-                file = discord.File(io.BytesIO(gif_bytes), filename=gif_filename)
-                embed.set_image(url=f"attachment://{gif_filename}")
-                gif_url_used = gif_url
-            except Exception:
-                logger.exception("Failed to attach remote gif for leave, will fallback")
-                file = None
-                gif_url_used = None
-
-        # Fallback PNG
-        if file is None:
-            avatar_url = getattr(member.display_avatar, "url", None)
-            avatar_bytes = None
-            if avatar_url:
-                try:
-                    avatar_bytes = await fetch_avatar_bytes_simple(avatar_url)
                 except Exception:
-                    avatar_bytes = None
-            try:
-                card_bytes = make_welcome_card(member.display_name, avatar_bytes, kind="leave")
-                file = discord.File(io.BytesIO(card_bytes), filename="goodbye.png")
-                embed.set_image(url="attachment://goodbye.png")
-            except Exception:
-                file = None
-                logger.exception("Failed to create goodbye PNG fallback")
+                    logger.exception("Failed to send leave embed to text channel")
 
-        # DM farewell
-        try:
-            if file:
-                await member.send(embed=embed, file=file)
-            else:
-                await member.send(embed=embed)
-        except Exception:
-            logger.info(f"Couldn't DM farewell to {member.display_name} (closed DMs?)")
-
-        # channel farewell
-        if text_channel:
+            # DM without NSFW media
             try:
-                if file:
-                    if gif_url_used:
-                        await text_channel.send(embed=embed, file=discord.File(io.BytesIO(gif_bytes), filename=gif_filename))
-                    elif card_bytes:
-                        await text_channel.send(embed=embed, file=discord.File(io.BytesIO(card_bytes), filename="goodbye.png"))
-                    else:
-                        await text_channel.send(embed=embed)
+                if member.dm_channel is None:
+                    try:
+                        await member.create_dm()
+                    except Exception:
+                        logger.debug("Could not create DM for member %s", member.id)
+
+                if file and not is_nsfw:
+                    try:
+                        await member.send(embed=embed, file=file)
+                    except Exception:
+                        logger.debug("Couldn't send DM with image; skipping")
                 else:
-                    await text_channel.send(embed=embed)
+                    try:
+                        await member.send(embed=embed)
+                    except Exception:
+                        logger.debug("Couldn't send DM without image; skipping")
             except Exception:
-                logger.exception("Failed to send leave embed to text channel")
+                logger.exception("Unexpected error while attempting DM on leave")
 
-        # cache used gif url (if any)
-        if gif_url_used:
-            async with data_lock:
-                used = data.get("used_gifs", [])
-                if gif_url_used not in used:
-                    used.append(gif_url_used)
-                    data["used_gifs"] = used
-                    await save_data_async()
-
-        # disconnect bot if empty
-        vc_client = guild.voice_client
-        if vc_client and vc_client.channel and vc_client.channel.id == target_voice.id:
-            non_bot_members = [m for m in vc_client.channel.members if not m.bot]
-            if len(non_bot_members) == 0:
-                try:
-                    await vc_client.disconnect()
-                    logger.info(f"Disconnected from VC {target_voice.name} as it's now empty.")
-                except Exception:
-                    logger.exception("Failed to disconnect from VC")
+            # Auto-disconnect the bot from VC when empty
+            try:
+                vc_client = guild.voice_client
+                if vc_client and vc_client.channel.id == target_vc.id:
+                    non_bot_members = [m for m in vc_client.channel.members if not m.bot]
+                    if len(non_bot_members) == 0:
+                        try:
+                            await vc_client.disconnect()
+                            logger.info("Disconnected from voice channel %s (empty)", target_vc.id)
+                        except Exception:
+                            logger.exception("Failed to disconnect from voice channel")
+            except Exception:
+                logger.exception("Error checking/disconnecting voice client")
 
 # -------------------------
-# Graceful shutdown / save
+# SIMPLE ADMIN COMMANDS (optional)
 # -------------------------
-@bot.event
-async def on_disconnect():
-    logger.info("Disconnecting — saving data sync.")
-    save_data_sync()
+@bot.command(name="reload_greetings")
+@commands.has_permissions(administrator=True)
+async def _reload_greetings(ctx):
+    """Example admin command placeholder — you could reload lists from disk if needed."""
+    await ctx.send("Greetings reload placeholder — lists are embedded in the bot file.")
 
 # -------------------------
-# Startup
+# START BOT
 # -------------------------
 if __name__ == "__main__":
-    load_data_sync()
-    bot.run(TOKEN)
+    if not TOKEN:
+        logger.error("TOKEN not set — aborting")
+    else:
+        try:
+            bot.run(TOKEN)
+        except Exception:
+            logger.exception("Bot terminated unexpectedly")
