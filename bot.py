@@ -13,7 +13,7 @@ TOKEN = os.getenv("TOKEN")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 
 VC_ID = 1353875050809524267
-VC_CHANNEL_ID = 1446752109151260792   # ✅ GREETING CHANNEL
+VC_CHANNEL_ID = 1446752109151260792   # GREETING CHANNEL
 
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
@@ -21,16 +21,13 @@ AUTOSAVE_INTERVAL = 30
 # ✅ STRICT HENTAI / ANIME-ART ONLY
 GIPHY_ALLOWED_TAGS = [
     "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
-    "anime ass","anime milf","anime girl","hentai anime",
-    "anime girl ecchi","genshin impact anime","gaming anime girl",
-    "anime fighting scene","anime battle","hentai anime art",
-    "anime hentai","anime ecchi hentai","nsfw anime art",
-    "hentai waifu","hentai anime girl","anime hentai gif",
-    "2d hentai animation","anime nsfw gif","ecchi anime girl",
-    "anime fanservice","anime lewd","anime ero","waifu ecchi",
-    "hentai 2d animation","anime blush ecchi","anime seductive",
-    "anime suggestive","ecchi fighting anime","lewd anime girl",
-    "anime swimsuit ecchi"
+    "anime ass","anime milf","anime girl","hentai anime","anime girl ecchi",
+    "genshin waifu","sexy anime girl","anime mommy","anime big boobs",
+    "hentai anime art","anime hentai","anime ecchi hentai","nsfw anime art",
+    "hentai waifu","hentai anime girl","anime hentai gif","hentai funny",
+    "anime nsfw gif","ecchi anime girl","anime fanservice","anime lewd","anime ero",
+    "waifu ecchi","hentai animation","anime blush ecchi","anime seductive",
+    "anime suggestive","ecchi fighting anime","lewd anime girl","anime swimsuit ecchi"
 ]
 
 GIPHY_RATING = "r"
@@ -42,7 +39,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anime-bot")
 
 # -------------------------
-# ✅ JOIN & LEAVE MESSAGES
+# JOIN & LEAVE GREETINGS
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} steps into the scene — the anime just got interesting.",
@@ -133,7 +130,7 @@ JOIN_GREETINGS = [
     "💍 Precious presence — {display_name}.",
     "🎒 Adventure awaits — {display_name} joins.",
     "📚 Story continues — {display_name} appears.",
-    "⚙️ Mechanized entrance — {display_name} enters.",
+    "⚙️ Mechanized entrance — {display_name}.",
     "🎶 A melody begins — welcome, {display_name}.",
     "🌈 Your aura colors the VC, {display_name}.",
     "🌀 Dramatic cut-in — {display_name} joins!",
@@ -158,6 +155,7 @@ LEAVE_GREETINGS = [
     "🪽 Angel glides away — bye {display_name}.",
     "💌 A final letter… {display_name} left.",
     "🌫️ Mist clears — {display_name} vanished.",
+    "🪞 Reflection breaks — {display_name} gone.",
     "🛡️ Protector rests — goodbye, {display_name}.",
     "🐺 Lone wolf {display_name} slips away.",
     "❄️ Snow settles — {display_name} logged out.",
@@ -195,12 +193,36 @@ LEAVE_GREETINGS = [
     "💍 Shine fades — {display_name} exits.",
     "🍣 Last sushi taken — {display_name} left.",
     "🌱 Seedling rests — {display_name} gone.",
+    "🎀 Ribbon untied — {display_name} exits.",
     "🍁 Leaf falls — farewell, {display_name}.",
+    "🔗 Chain breaks — {display_name} left.",
     "🩶 Grey clouds remain — {display_name}.",
     "🕯️ Candle blows out — {display_name} left.",
+    "🎵 Final note plays — goodbye {display_name}.",
+    "🐉 Dragon tail disappears — {display_name}.",
+    "🏮 Lantern dims — {display_name} leaves.",
+    "🕸️ Web breaks — {display_name} left.",
+    "🌫️ Fog settles — {display_name} exits.",
+    "💔 Heart cracks — {display_name} left the VC.",
+    "🎲 Game over — {display_name} quits.",
+    "🖤 Shadow fades — bye {display_name}.",
+    "🌑 Darkness takes {display_name}.",
+    "🪽 Feather falls — {display_name} gone.",
+    "🌪️ Storm quiet — {display_name} left.",
+    "🍉 Summer fades — {display_name} exits.",
+    "🍂 Rustling stops — {display_name}.",
+    "🌻 Sunflower bows — {display_name} gone.",
+    "🌴 Breeze stops — {display_name} left.",
+    "🍬 Sweetness gone — bye {display_name}.",
+    "🧠 Big brain left — {display_name}.",
+    "🧨 Firework finished — {display_name} left.",
+    "🎯 Target cleared — {display_name} gone.",
+    "🛌 Sleep calls {display_name}.",
+    "🚪 Door closes — {display_name} left.",
+    "⚰️ Dead silence — {display_name} exits.",
+    "📚 Story ends — {display_name}.",
     "🌒 Fade to black — {display_name} left."
 ]
-
 # -------------------------
 # BOT SETUP
 # -------------------------
@@ -223,7 +245,7 @@ async def autosave_task():
         json.dump(data, f, indent=2)
 
 # -------------------------
-# NSFW HENTAI GIF FETCH
+# FETCH GIF FROM GIPHY
 # -------------------------
 async def fetch_giphy():
     tag = random.choice(GIPHY_ALLOWED_TAGS)
@@ -240,7 +262,7 @@ async def fetch_giphy():
                 return gif_bytes, name
 
 # -------------------------
-# EMBED
+# MAKE EMBED
 # -------------------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.pink() if kind == "join" else discord.Color.dark_grey()
@@ -262,7 +284,7 @@ def make_embed(title, desc, member, kind="join", count=None):
     return embed
 
 # -------------------------
-# READY
+# BOT READY
 # -------------------------
 @bot.event
 async def on_ready():
@@ -274,7 +296,7 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
 # -------------------------
-# VOICE EVENTS
+# VOICE STATE UPDATE
 # -------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -286,7 +308,7 @@ async def on_voice_state_update(member, before, after):
     text_channel = bot.get_channel(VC_CHANNEL_ID)
     vc = guild.voice_client
 
-    # ✅ USER JOIN
+    # USER JOIN
     if before.channel is None and after.channel == target_vc:
         if not vc:
             await target_vc.connect()
@@ -295,24 +317,24 @@ async def on_voice_state_update(member, before, after):
         msg = raw_msg.format(display_name=member.display_name)
 
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
-
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
 
         gif_bytes, gif_name = await fetch_giphy()
-        file1 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
         embed.set_image(url=f"attachment://{gif_name}")
 
+        # SEND EMBED ONLY, NO MENTION
         if text_channel:
-            await text_channel.send(content=member.mention, embed=embed, file=file1)
+            await text_channel.send(embed=embed, file=file)
 
-        # ✅ FIXED DM GIF ISSUE
+        # SEND DM
         try:
-            file2 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-            await member.send(embed=embed, file=file2)
+            dm_file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            await member.send(embed=embed, file=dm_file)
         except:
             pass
 
-    # ✅ USER LEAVE
+    # USER LEAVE
     if before.channel == target_vc and after.channel != target_vc:
         raw_msg = random.choice(LEAVE_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
@@ -320,19 +342,21 @@ async def on_voice_state_update(member, before, after):
         embed = make_embed("Goodbye!", msg, member, "leave")
 
         gif_bytes, gif_name = await fetch_giphy()
-        file1 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
         embed.set_image(url=f"attachment://{gif_name}")
 
+        # SEND EMBED ONLY, NO MENTION
         if text_channel:
-            await text_channel.send(content=member.mention, embed=embed, file=file1)
+            await text_channel.send(embed=embed, file=file)
 
-        # ✅ FIXED DM GIF ISSUE
+        # SEND DM
         try:
-            file2 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-            await member.send(embed=embed, file=file2)
+            dm_file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            await member.send(embed=embed, file=dm_file)
         except:
             pass
 
+        # DISCONNECT VC IF EMPTY
         if vc and len([m for m in vc.channel.members if not m.bot]) == 0:
             await vc.disconnect()
 
