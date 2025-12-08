@@ -1,2 +1,13 @@
 [phases.setup]
+# ensure Python is available
 nixPkgs = ["python3"]
+
+[phases.install]
+# default pip install will run and use requirements.txt
+
+[phases.build]
+# no build step required for pure python
+
+[start]
+# start command
+command = "python bot.py"
