@@ -1,4 +1,4 @@
-# bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | No Mention in Server)
+# bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | Mention Only for User in Server)
 
 import os, io, json, asyncio, random, hashlib, logging
 from datetime import datetime
@@ -234,7 +234,6 @@ intents.voice_states = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
 data = {"join_counts": {}}
 
 # -------------------------
@@ -250,7 +249,6 @@ async def autosave_task():
 # -------------------------
 async def fetch_gif():
     tag = random.choice(GIF_TAGS)
-
     # ----- Try Tenor -----
     if TENOR_API_KEY:
         try:
@@ -281,7 +279,6 @@ async def fetch_gif():
         except Exception as e:
             logger.warning(f"Giphy failed: {e}")
 
-    # ----- Fallback blank GIF -----
     return None, None
 
 # -------------------------
@@ -341,13 +338,14 @@ async def on_voice_state_update(member, before, after):
             file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
             embed.set_image(url=f"attachment://{gif_name}")
             if text_channel:
-                await text_channel.send(embed=embed, file=file)
+                # ✅ Mention only the member in server message
+                await text_channel.send(content=f"{member.mention}", embed=embed, file=file)
             try:
                 await member.send(embed=embed, file=file)
             except: pass
         else:
             if text_channel:
-                await text_channel.send(embed=embed)
+                await text_channel.send(content=f"{member.mention}", embed=embed)
             try:
                 await member.send(embed=embed)
             except: pass
@@ -363,18 +361,18 @@ async def on_voice_state_update(member, before, after):
             file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
             embed.set_image(url=f"attachment://{gif_name}")
             if text_channel:
-                await text_channel.send(embed=embed, file=file)
+                # ✅ Mention only the member in server message
+                await text_channel.send(content=f"{member.mention}", embed=embed, file=file)
             try:
                 await member.send(embed=embed, file=file)
             except: pass
         else:
             if text_channel:
-                await text_channel.send(embed=embed)
+                await text_channel.send(content=f"{member.mention}", embed=embed)
             try:
                 await member.send(embed=embed)
             except: pass
 
-        # DISCONNECT VC IF EMPTY
         if vc and len([m for m in vc.channel.members if not m.bot]) == 0:
             await vc.disconnect()
 
