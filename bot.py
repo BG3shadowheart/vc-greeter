@@ -67,11 +67,11 @@ AVATAR_SIZE = 220
 # Allowed SFW GIPHY tags (randomly chosen each request)
 GIPHY_ALLOWED_TAGS = [
     "anime", "waifu", "kawaii", "neko", "chibi", "moe", "cute", "magical+girl", "senpai",
-    "vaporwave", "yuri", "shoujo", "shonen"
+    "vaporwave", "yuri", "shoujo", "shonen", "anime nsfw", "anime milf", "hentai", "anime sexy", "anime boobs", "anime ass"
 ]
 
-# Use Giphy rating to enforce SFW (g, pg, or pg-13). We will request rating=pg-13.
-GIPHY_RATING = "pg-13"
+# Use Giphy rating to enforce SFW (g, pg, or pg-13). We will request rating=pg-18.
+GIPHY_RATING = "pg-18"
 
 # -------------------------
 # Logging
