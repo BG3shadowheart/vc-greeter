@@ -33,6 +33,7 @@ VC_CHANNEL_ID = 1446752109151260792   # GREETING CHANNEL
 
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
+MAX_USED_GIFS_PER_USER = 500  # keep history bounded to avoid unbounded data growth
 
 # ✅ STRICT HENTAI / ANIME-ART RELATED TAGS
 GIF_TAGS = [
@@ -256,10 +257,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # -------------------------
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"join_counts": {}}, f)
+        json.dump({"join_counts": {}, "used_gifs": {}}, f)
 
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
+
+# ensure the structure exists
+if "join_counts" not in data:
+    data["join_counts"] = {}
+if "used_gifs" not in data:
+    data["used_gifs"] = {}
 
 @tasks.loop(seconds=AUTOSAVE_INTERVAL)
 async def autosave_task():
@@ -270,55 +277,143 @@ async def autosave_task():
         logger.warning(f"Autosave failed: {e}")
 
 # -------------------------
-# FETCH GIF (TENOR FIRST, FALLBACK GIPHY)
+# RANDOMIZED TAG GENERATOR (mixes 1-3 tags)
 # -------------------------
-async def fetch_gif():
-    tag = random.choice(GIF_TAGS)
+def get_random_tag():
+    # choose 1 to 3 tags and join them — ensures variety and mixed queries
+    k = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
+    chosen = random.sample(GIF_TAGS, k)
+    # join with spaces to form a natural search query
+    return " ".join(chosen)
 
-    # Try Tenor (v1/v2 style)
-    if TENOR_API_KEY:
-        try:
-            tenor_url = f"https://g.tenor.com/v1/random?q={tag}&key={TENOR_API_KEY}&limit=1&contentfilter=off"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(tenor_url) as resp:
-                    if resp.status == 200:
-                        data_resp = await resp.json()
-                        # safe-guard indexing
-                        if data_resp.get("results"):
-                            media = data_resp["results"][0].get("media") or data_resp["results"][0].get("media_formats")
-                            # tenor v1 and v2 formats differ; try common paths
-                            gif_url = None
-                            if media and isinstance(media, list) and media[0].get("gif"):
-                                gif_url = media[0]["gif"].get("url")
-                            elif data_resp["results"][0].get("media_formats") and data_resp["results"][0]["media_formats"].get("gif"):
-                                gif_url = data_resp["results"][0]["media_formats"]["gif"].get("url")
-                            elif data_resp["results"][0].get("media") and data_resp["results"][0]["media"][0].get("gif"):
-                                gif_url = data_resp["results"][0]["media"][0]["gif"].get("url")
-                            if gif_url:
-                                async with session.get(gif_url) as gr:
-                                    gif_bytes = await gr.read()
-                                    name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
-                                    return gif_bytes, name, gif_url
-        except Exception as e:
-            logger.warning(f"Tenor fetch failed: {e}")
+# -------------------------
+# SAVE DATA UTIL
+# -------------------------
+def save_data():
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save data: {e}")
 
-    # Fallback to Giphy
-    if GIPHY_API_KEY:
-        try:
-            giphy_url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(giphy_url) as resp:
-                    if resp.status == 200:
-                        obj = await resp.json()
-                        gif_url = obj.get("data", {}).get("images", {}).get("original", {}).get("url")
-                        if gif_url:
-                            async with session.get(gif_url) as gr:
-                                gif_bytes = await gr.read()
-                                name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
-                                return gif_bytes, name, gif_url
-        except Exception as e:
-            logger.warning(f"Giphy fetch failed: {e}")
+# -------------------------
+# FETCH GIF (TENOR FIRST, FALLBACK GIPHY) - AVOID SENDING SAME GIF TO SAME USER
+# -------------------------
+async def fetch_gif(user_id):
+    """
+    Attempts to fetch a GIF not previously sent to `user_id`.
+    Uses Tenor (search/random multiple results) first, then Giphy search fallback.
+    Returns (gif_bytes, filename, gif_url) or (None, None, None).
+    """
+    user_key = str(user_id)
+    used = data["used_gifs"].setdefault(user_key, [])
 
+    # attempt a few different random tag searches to increase chance of fresh gif
+    attempts = 3
+    for attempt in range(attempts):
+        tag = get_random_tag()
+
+        # -------- TENOR: use search/random with multiple results if available --------
+        if TENOR_API_KEY:
+            try:
+                # request multiple results to pick a fresh one
+                tenor_url = f"https://g.tenor.com/v1/search?q={aiohttp.helpers.quote(tag)}&key={TENOR_API_KEY}&limit=20&contentfilter=off"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(tenor_url) as resp:
+                        if resp.status == 200:
+                            data_resp = await resp.json()
+                            results = data_resp.get("results", [])
+                            # shuffle results to randomize selection order
+                            random.shuffle(results)
+                            for result in results:
+                                # Tenor has different result formats; try multiple paths
+                                gif_url = None
+                                # v2-like media_formats
+                                media_formats = result.get("media_formats") or result.get("media")
+                                if isinstance(media_formats, dict):
+                                    gif_entry = media_formats.get("gif")
+                                    if gif_entry and gif_entry.get("url"):
+                                        gif_url = gif_entry.get("url")
+                                elif isinstance(media_formats, list) and len(media_formats) > 0:
+                                    first = media_formats[0]
+                                    if isinstance(first, dict) and first.get("gif") and first["gif"].get("url"):
+                                        gif_url = first["gif"].get("url")
+                                # older tenor keys
+                                if not gif_url and result.get("media"):
+                                    try:
+                                        media_list = result.get("media")
+                                        if isinstance(media_list, list) and media_list and media_list[0].get("gif"):
+                                            gif_url = media_list[0]["gif"].get("url")
+                                    except Exception:
+                                        pass
+
+                                if not gif_url:
+                                    continue
+
+                                gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                                if gif_hash in used:
+                                    continue  # skip gifs already sent to this user
+
+                                # fetch the gif bytes
+                                try:
+                                    async with session.get(gif_url) as gr:
+                                        if gr.status == 200:
+                                            gif_bytes = await gr.read()
+                                            name = f"tenor_{gif_hash[:6]}.gif"
+                                            # record usage
+                                            used.append(gif_hash)
+                                            # trim history if too big
+                                            if len(used) > MAX_USED_GIFS_PER_USER:
+                                                del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                            save_data()
+                                            return gif_bytes, name, gif_url
+                                except Exception as e:
+                                    logger.warning(f"Failed to download Tenor gif: {e}")
+            except Exception as e:
+                logger.warning(f"Tenor fetch failed (attempt {attempt+1}): {e}")
+
+        # -------- FALLBACK: GIPHY (search endpoint to retrieve many options) --------
+        if GIPHY_API_KEY:
+            try:
+                # use search to get multiple results; q needs to be URL-encoded
+                giphy_search = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={aiohttp.helpers.quote(tag)}&limit=20&rating={GIPHY_RATING}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(giphy_search) as resp:
+                        if resp.status == 200:
+                            obj = await resp.json()
+                            arr = obj.get("data", [])
+                            random.shuffle(arr)
+                            for item in arr:
+                                gif_url = None
+                                images = item.get("images", {})
+                                if images and images.get("original") and images["original"].get("url"):
+                                    gif_url = images["original"].get("url")
+                                if not gif_url:
+                                    continue
+
+                                gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                                if gif_hash in used:
+                                    continue
+
+                                try:
+                                    async with session.get(gif_url) as gr:
+                                        if gr.status == 200:
+                                            gif_bytes = await gr.read()
+                                            name = f"giphy_{gif_hash[:6]}.gif"
+                                            used.append(gif_hash)
+                                            # trim history if too big
+                                            if len(used) > MAX_USED_GIFS_PER_USER:
+                                                del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                            save_data()
+                                            return gif_bytes, name, gif_url
+                                except Exception as e:
+                                    logger.warning(f"Failed to download Giphy gif: {e}")
+            except Exception as e:
+                logger.warning(f"Giphy fetch failed (attempt {attempt+1}): {e}")
+
+        # if this attempt didn't yield a fresh gif, try again with a new tag
+
+    # nothing fresh found after attempts
     return None, None, None
 
 # -------------------------
@@ -381,7 +476,8 @@ async def on_voice_state_update(member, before, after):
 
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
 
-        gif_bytes, gif_name, gif_url = await fetch_gif()
+        # PASS user id to fetch_gif to avoid duplicates per user
+        gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
         if gif_bytes:
             try:
                 # server file
@@ -426,7 +522,7 @@ async def on_voice_state_update(member, before, after):
         msg = raw_msg.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
 
-        gif_bytes, gif_name, gif_url = await fetch_gif()
+        gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
         if gif_bytes:
             try:
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
