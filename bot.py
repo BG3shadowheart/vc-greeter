@@ -20,44 +20,19 @@ AUTOSAVE_INTERVAL = 30
 
 # ✅ STRICT HENTAI / ANIME-ART ONLY
 GIPHY_ALLOWED_TAGS = [
-    "anime sexy",
-    "anime waifu",
-    "hentai",
-    "anime ecchi",
-    "anime boobs",
-    "anime ass",
-    "anime milf",
-    "anime girl",
-    "hentai anime",
-    "anime girl ecchi",
-    "genshin impact anime",
-    "gaming anime girl",
-    "anime fighting scene",
-    "anime battle",
-
-    # ✅ More hentai / anime-art related tags added
-    "hentai anime art",
-    "anime hentai",
-    "anime ecchi hentai",
-    "nsfw anime art",
-    "hentai waifu",
-    "hentai anime girl",
-    "anime hentai gif",
-    "2d hentai animation",
-    "anime nsfw gif",
-    "ecchi anime girl",
-    "anime fanservice",
-    "anime lewd",
-    "anime ero",
-    "waifu ecchi",
-    "hentai 2d animation",
-    "anime blush ecchi",
-    "anime seductive",
-    "anime suggestive",
-    "ecchi fighting anime",
-    "lewd anime girl",
+    "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
+    "anime ass","anime milf","anime girl","hentai anime",
+    "anime girl ecchi","genshin impact anime","gaming anime girl",
+    "anime fighting scene","anime battle","hentai anime art",
+    "anime hentai","anime ecchi hentai","nsfw anime art",
+    "hentai waifu","hentai anime girl","anime hentai gif",
+    "2d hentai animation","anime nsfw gif","ecchi anime girl",
+    "anime fanservice","anime lewd","anime ero","waifu ecchi",
+    "hentai 2d animation","anime blush ecchi","anime seductive",
+    "anime suggestive","ecchi fighting anime","lewd anime girl",
     "anime swimsuit ecchi"
 ]
+
 GIPHY_RATING = "r"
 
 # -------------------------
@@ -67,7 +42,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anime-bot")
 
 # -------------------------
-# ✅ JOIN GREETINGS (100+)
+# ✅ JOIN & LEAVE MESSAGES
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} steps into the scene — the anime just got interesting.",
@@ -158,7 +133,7 @@ JOIN_GREETINGS = [
     "💍 Precious presence — {display_name}.",
     "🎒 Adventure awaits — {display_name} joins.",
     "📚 Story continues — {display_name} appears.",
-    "⚙️ Mechanized entrance — {display_name}.",
+    "⚙️ Mechanized entrance — {display_name} enters.",
     "🎶 A melody begins — welcome, {display_name}.",
     "🌈 Your aura colors the VC, {display_name}.",
     "🌀 Dramatic cut-in — {display_name} joins!",
@@ -183,7 +158,6 @@ LEAVE_GREETINGS = [
     "🪽 Angel glides away — bye {display_name}.",
     "💌 A final letter… {display_name} left.",
     "🌫️ Mist clears — {display_name} vanished.",
-    "🪞 Reflection breaks — {display_name} gone.",
     "🛡️ Protector rests — goodbye, {display_name}.",
     "🐺 Lone wolf {display_name} slips away.",
     "❄️ Snow settles — {display_name} logged out.",
@@ -221,34 +195,9 @@ LEAVE_GREETINGS = [
     "💍 Shine fades — {display_name} exits.",
     "🍣 Last sushi taken — {display_name} left.",
     "🌱 Seedling rests — {display_name} gone.",
-    "🎀 Ribbon untied — {display_name} exits.",
     "🍁 Leaf falls — farewell, {display_name}.",
-    "🔗 Chain breaks — {display_name} left.",
     "🩶 Grey clouds remain — {display_name}.",
     "🕯️ Candle blows out — {display_name} left.",
-    "🎵 Final note plays — goodbye {display_name}.",
-    "🐉 Dragon tail disappears — {display_name}.",
-    "🏮 Lantern dims — {display_name} leaves.",
-    "🕸️ Web breaks — {display_name} left.",
-    "🌫️ Fog settles — {display_name} exits.",
-    "💔 Heart cracks — {display_name} left the VC.",
-    "🎲 Game over — {display_name} quits.",
-    "🖤 Shadow fades — bye {display_name}.",
-    "🌑 Darkness takes {display_name}.",
-    "🪽 Feather falls — {display_name} gone.",
-    "🌪️ Storm quiet — {display_name} left.",
-    "🍉 Summer fades — {display_name} exits.",
-    "🍂 Rustling stops — {display_name}.",
-    "🌻 Sunflower bows — {display_name} gone.",
-    "🌴 Breeze stops — {display_name} left.",
-    "🍬 Sweetness gone — bye {display_name}.",
-    "🧠 Big brain left — {display_name}.",
-    "🧨 Firework finished — {display_name} left.",
-    "🎯 Target cleared — {display_name} gone.",
-    "🛌 Sleep calls {display_name}.",
-    "🚪 Door closes — {display_name} left.",
-    "⚰️ Dead silence — {display_name} exits.",
-    "📚 Story ends — {display_name}.",
     "🌒 Fade to black — {display_name} left."
 ]
 
@@ -263,9 +212,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-data = {
-    "join_counts": {}
-}
+data = {"join_counts": {}}
 
 # -------------------------
 # AUTO SAVE
@@ -352,14 +299,16 @@ async def on_voice_state_update(member, before, after):
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
 
         gif_bytes, gif_name = await fetch_giphy()
-        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+        file1 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
         embed.set_image(url=f"attachment://{gif_name}")
 
         if text_channel:
-            await text_channel.send(content=member.mention, embed=embed, file=file)
+            await text_channel.send(content=member.mention, embed=embed, file=file1)
 
+        # ✅ FIXED DM GIF ISSUE
         try:
-            await member.send(embed=embed, file=file)
+            file2 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            await member.send(embed=embed, file=file2)
         except:
             pass
 
@@ -371,14 +320,16 @@ async def on_voice_state_update(member, before, after):
         embed = make_embed("Goodbye!", msg, member, "leave")
 
         gif_bytes, gif_name = await fetch_giphy()
-        file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+        file1 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
         embed.set_image(url=f"attachment://{gif_name}")
 
         if text_channel:
-            await text_channel.send(content=member.mention, embed=embed, file=file)
+            await text_channel.send(content=member.mention, embed=embed, file=file1)
 
+        # ✅ FIXED DM GIF ISSUE
         try:
-            await member.send(embed=embed, file=file)
+            file2 = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+            await member.send(embed=embed, file=file2)
         except:
             pass
 
