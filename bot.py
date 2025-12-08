@@ -1,5 +1,6 @@
 # bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | Multi-VC | No Server Mention)
 # FULL SCRIPT — copy & paste as-is
+# Added: owner-only react-based GIF rejection (owner can ❌ a GIF to never use it again for that server)
 
 import os
 import io
@@ -248,6 +249,7 @@ intents.guilds = True
 intents.members = True
 intents.voice_states = True
 intents.message_content = True
+intents.reactions = True  # required to listen to reactions
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -256,69 +258,91 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # -------------------------
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
-        json.dump({"join_counts": {}}, f)
+        json.dump({"join_counts": {}, "rejected_gifs": {}, "message_gif_map": {}}, f)
 
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
 
-@tasks.loop(seconds=AUTOSAVE_INTERVAL)
-async def autosave_task():
+# ensure keys exist
+data.setdefault("join_counts", {})
+data.setdefault("rejected_gifs", {})       # guild_id (str) -> [gif_url, ...]
+data.setdefault("message_gif_map", {})     # guild_id (str) -> {message_id (str): gif_url}
+
+def save_data():
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        logger.warning(f"Autosave failed: {e}")
+        logger.warning(f"Failed to save data: {e}")
+
+@tasks.loop(seconds=AUTOSAVE_INTERVAL)
+async def autosave_task():
+    save_data()
 
 # -------------------------
-# FETCH GIF (TENOR FIRST, FALLBACK GIPHY)
+# FETCH GIF (TENOR FIRST, FALLBACK GIPHY) with rejection avoidance
 # -------------------------
-async def fetch_gif():
-    tag = random.choice(GIF_TAGS)
+async def fetch_gif(guild_id=None, max_attempts=6):
+    """
+    Returns (gif_bytes, gif_name, gif_url) or (None, None, None).
+    If guild_id provided, will avoid gif_urls in data['rejected_gifs'][guild_id].
+    """
+    rejected = set()
+    if guild_id is not None:
+        rejected = set(data.get("rejected_gifs", {}).get(str(guild_id), []))
 
-    # Try Tenor (v1/v2 style)
-    if TENOR_API_KEY:
-        try:
-            tenor_url = f"https://g.tenor.com/v1/random?q={tag}&key={TENOR_API_KEY}&limit=1&contentfilter=off"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(tenor_url) as resp:
-                    if resp.status == 200:
-                        data_resp = await resp.json()
-                        # safe-guard indexing
-                        if data_resp.get("results"):
-                            media = data_resp["results"][0].get("media") or data_resp["results"][0].get("media_formats")
-                            # tenor v1 and v2 formats differ; try common paths
-                            gif_url = None
-                            if media and isinstance(media, list) and media[0].get("gif"):
-                                gif_url = media[0]["gif"].get("url")
-                            elif data_resp["results"][0].get("media_formats") and data_resp["results"][0]["media_formats"].get("gif"):
-                                gif_url = data_resp["results"][0]["media_formats"]["gif"].get("url")
-                            elif data_resp["results"][0].get("media") and data_resp["results"][0]["media"][0].get("gif"):
-                                gif_url = data_resp["results"][0]["media"][0]["gif"].get("url")
-                            if gif_url:
-                                async with session.get(gif_url) as gr:
-                                    gif_bytes = await gr.read()
-                                    name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
-                                    return gif_bytes, name, gif_url
-        except Exception as e:
-            logger.warning(f"Tenor fetch failed: {e}")
+    for attempt in range(max_attempts):
+        tag = random.choice(GIF_TAGS)
 
-    # Fallback to Giphy
-    if GIPHY_API_KEY:
-        try:
-            giphy_url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(giphy_url) as resp:
-                    if resp.status == 200:
-                        obj = await resp.json()
-                        gif_url = obj.get("data", {}).get("images", {}).get("original", {}).get("url")
-                        if gif_url:
-                            async with session.get(gif_url) as gr:
-                                gif_bytes = await gr.read()
-                                name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
-                                return gif_bytes, name, gif_url
-        except Exception as e:
-            logger.warning(f"Giphy fetch failed: {e}")
+        # Try Tenor
+        if TENOR_API_KEY:
+            try:
+                tenor_url = f"https://g.tenor.com/v1/random?q={tag}&key={TENOR_API_KEY}&limit=1&contentfilter=off"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(tenor_url, timeout=10) as resp:
+                        if resp.status == 200:
+                            data_resp = await resp.json()
+                            # tenor v1 format
+                            if data_resp.get("results"):
+                                res = data_resp["results"][0]
+                                gif_url = None
+                                # try different possible paths
+                                if res.get("media") and isinstance(res["media"], list) and res["media"][0].get("gif"):
+                                    gif_url = res["media"][0]["gif"].get("url")
+                                if not gif_url and res.get("media_formats") and res["media_formats"].get("gif"):
+                                    gif_url = res["media_formats"]["gif"].get("url")
+                                if not gif_url and res.get("media") and res["media"][0].get("nanogif"):
+                                    gif_url = res["media"][0]["nanogif"].get("url")
+                                if gif_url and gif_url not in rejected:
+                                    async with session.get(gif_url, timeout=10) as gr:
+                                        if gr.status == 200:
+                                            gif_bytes = await gr.read()
+                                            name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
+                                            return gif_bytes, name, gif_url
+                                # if rejected, continue loop and try again
+            except Exception as e:
+                logger.debug(f"Tenor attempt failed: {e}")
 
+        # Fallback to Giphy
+        if GIPHY_API_KEY:
+            try:
+                giphy_url = f"https://api.giphy.com/v1/gifs/random?api_key={GIPHY_API_KEY}&tag={tag}&rating={GIPHY_RATING}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(giphy_url, timeout=10) as resp:
+                        if resp.status == 200:
+                            obj = await resp.json()
+                            gif_url = obj.get("data", {}).get("images", {}).get("original", {}).get("url")
+                            if gif_url and gif_url not in rejected:
+                                async with session.get(gif_url, timeout=10) as gr:
+                                    if gr.status == 200:
+                                        gif_bytes = await gr.read()
+                                        name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:6]}.gif"
+                                        return gif_bytes, name, gif_url
+            except Exception as e:
+                logger.debug(f"Giphy attempt failed: {e}")
+
+        # if we reach here, try next attempt (different tag)
+    # final fallback
     return None, None, None
 
 # -------------------------
@@ -348,6 +372,97 @@ async def on_ready():
     logger.info(f"✅ Logged in as {bot.user}")
 
 # -------------------------
+# REACTION HANDLER (OWNER ONLY)
+# -------------------------
+@bot.event
+async def on_reaction_add(reaction, user):
+    """
+    Owner can react with ✅ to approve (no-op) or ❌ to reject (never use again).
+    Only reactions in VC_CHANNEL_ID on bot messages are considered.
+    """
+    try:
+        message = reaction.message
+        if message.author != bot.user:
+            return
+        if message.channel.id != VC_CHANNEL_ID:
+            return
+
+        guild = message.guild
+        if not guild:
+            return
+
+        owner_id = guild.owner_id
+        # only owner reactions matter
+        if user.id != owner_id:
+            # remove reactions from non-owners to keep it clear
+            try:
+                await message.remove_reaction(reaction.emoji, user)
+            except Exception:
+                pass
+            return
+
+        emoji = str(reaction.emoji)
+        guild_key = str(guild.id)
+        msg_key = str(message.id)
+        # find gif_url associated with this message (if any)
+        message_map = data.get("message_gif_map", {}).get(guild_key, {})
+        gif_url = message_map.get(msg_key)
+
+        if not gif_url:
+            # nothing to do
+            return
+
+        if emoji == "❌" or emoji == "✖️":
+            # add to rejected for this guild
+            rejected = data.setdefault("rejected_gifs", {}).setdefault(guild_key, [])
+            if gif_url not in rejected:
+                rejected.append(gif_url)
+                save_data()
+            # optionally edit message footer to indicate rejected (non-intrusive)
+            try:
+                new_embed = message.embeds[0]
+                # append small note to description
+                desc = new_embed.description or ""
+                if "\n\n**Owner:** Rejected" not in desc:
+                    new_desc = desc + "\n\n**Owner:** Rejected (will not be used again)"
+                    # create a copy and edit
+                    edited = discord.Embed.from_dict(new_embed.to_dict())
+                    edited.description = new_desc
+                    await message.edit(embed=edited)
+            except Exception:
+                pass
+
+            # remove mapping for this message (we won't use it again)
+            try:
+                data["message_gif_map"].get(guild_key, {}).pop(msg_key, None)
+                save_data()
+            except Exception:
+                pass
+
+        elif emoji == "✅" or emoji == "✔️":
+            # approve = do nothing but mark that owner approved this message (optional)
+            try:
+                new_embed = message.embeds[0]
+                desc = new_embed.description or ""
+                if "\n\n**Owner:** Approved" not in desc:
+                    new_desc = desc + "\n\n**Owner:** Approved"
+                    edited = discord.Embed.from_dict(new_embed.to_dict())
+                    edited.description = new_desc
+                    await message.edit(embed=edited)
+            except Exception:
+                pass
+
+            # clear mapping for cleanliness
+            try:
+                data["message_gif_map"].get(guild_key, {}).pop(msg_key, None)
+                save_data()
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.debug(f"on_reaction_add error: {e}")
+
+# -------------------------
 # VOICE STATE UPDATE (MULTI VC)
 # -------------------------
 @bot.event
@@ -373,23 +488,36 @@ async def on_voice_state_update(member, before, after):
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
 
         # Save immediately
-        try:
-            with open(DATA_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to save data: {e}")
+        save_data()
 
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
 
-        gif_bytes, gif_name, gif_url = await fetch_gif()
+        gif_bytes, gif_name, gif_url = await fetch_gif(guild.id)
         if gif_bytes:
             try:
                 # server file
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                 embed.set_image(url=f"attachment://{gif_name}")
                 if text_channel:
-                    # NO server mention — embed + GIF only
-                    await text_channel.send(embed=embed, file=file_server)
+                    sent = await text_channel.send(embed=embed, file=file_server)
+                else:
+                    sent = None
+
+                # store message->gif_url mapping so owner can react later
+                try:
+                    if sent and gif_url:
+                        gid = str(guild.id)
+                        data.setdefault("message_gif_map", {}).setdefault(gid, {})[str(sent.id)] = gif_url
+                        save_data()
+                    # add reactions for owner to choose (only useful if gif present)
+                    if sent:
+                        try:
+                            await sent.add_reaction("✅")
+                            await sent.add_reaction("❌")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
                 # recreate file for DM (avoid stream reuse)
                 try:
@@ -407,14 +535,20 @@ async def on_voice_state_update(member, before, after):
             except Exception as e:
                 logger.warning(f"Failed to send server join file: {e}")
                 if text_channel:
-                    await text_channel.send(embed=embed)
+                    try:
+                        sent = await text_channel.send(embed=embed)
+                    except Exception:
+                        sent = None
                 try:
                     await member.send(embed=embed)
                 except Exception:
                     logger.warning(f"Failed to DM {member.display_name}")
         else:
             if text_channel:
-                await text_channel.send(embed=embed)
+                try:
+                    sent = await text_channel.send(embed=embed)
+                except Exception:
+                    sent = None
             try:
                 await member.send(embed=embed)
             except Exception:
@@ -426,13 +560,30 @@ async def on_voice_state_update(member, before, after):
         msg = raw_msg.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
 
-        gif_bytes, gif_name, gif_url = await fetch_gif()
+        gif_bytes, gif_name, gif_url = await fetch_gif(guild.id)
         if gif_bytes:
             try:
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                 embed.set_image(url=f"attachment://{gif_name}")
                 if text_channel:
-                    await text_channel.send(embed=embed, file=file_server)
+                    sent = await text_channel.send(embed=embed, file=file_server)
+                else:
+                    sent = None
+
+                # store mapping for owner reaction
+                try:
+                    if sent and gif_url:
+                        gid = str(guild.id)
+                        data.setdefault("message_gif_map", {}).setdefault(gid, {})[str(sent.id)] = gif_url
+                        save_data()
+                    if sent:
+                        try:
+                            await sent.add_reaction("✅")
+                            await sent.add_reaction("❌")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
                 # recreate file for DM
                 try:
@@ -449,14 +600,20 @@ async def on_voice_state_update(member, before, after):
             except Exception as e:
                 logger.warning(f"Failed to send server leave file: {e}")
                 if text_channel:
-                    await text_channel.send(embed=embed)
+                    try:
+                        await text_channel.send(embed=embed)
+                    except Exception:
+                        pass
                 try:
                     await member.send(embed=embed)
                 except Exception:
                     logger.warning(f"Failed to DM {member.display_name}")
         else:
             if text_channel:
-                await text_channel.send(embed=embed)
+                try:
+                    await text_channel.send(embed=embed)
+                except Exception:
+                    pass
             try:
                 await member.send(embed=embed)
             except Exception:
