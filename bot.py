@@ -1,9 +1,10 @@
-# bot.py — Updated: Randomized Questionable Anime Welcome Bot
-# Modified to keep all providers & tags but automatically skip images/posts
-# that contain explicit nudity indicators (Filter Level A: block direct nudity/genitals/etc.)
-#
-# Full replacement for your current bot.py — copy & paste and run.
-# Make sure environment variables (TOKEN, TENOR_API_KEY, GIPHY_API_KEY) remain set.
+# bot_revised.py
+# Revised: boosted safe providers + hard/soft nudity filter (Option A)
+# Usage:
+#   export TOKEN="your_discord_bot_token"
+#   export TENOR_API_KEY="..."   # optional
+#   export GIPHY_API_KEY="..."   # optional
+# Then run: python bot_revised.py
 
 import os
 import io
@@ -20,31 +21,30 @@ import discord
 from discord.ext import commands, tasks
 
 # -------------------------
-# CONFIG - set these as env vars or export them before running
+# CONFIG - set these as env vars before running
 # -------------------------
 TOKEN = os.getenv("TOKEN")
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 
-# MULTIPLE VCs (same server) - replace with your actual VC IDs
+# MULTIPLE VCs (kept same as your uploaded file)
 VC_IDS = [
     1353875050809524267,
     21409170559337762980,
     1353882705246556220
 ]
 
-# TEXT CHANNEL TO POST EMBEDS (replace with your channel ID)
+# TEXT CHANNEL TO POST EMBEDS (kept same)
 VC_CHANNEL_ID = 1446752109151260792
 
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 1000
-FETCH_ATTEMPTS = 40   # aggressive: will try many provider/tag combos before giving up
+FETCH_ATTEMPTS = 40   # attempts to find a gif
 
 # -------------------------
-# GIF TAGS - keep your spicy/full list
-# (USER WANTED to keep all tags & providers unchanged)
+# GIF TAGS (kept large & spicy as you had)
 # -------------------------
 GIF_TAGS = [
     "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
@@ -65,182 +65,20 @@ GIF_TAGS = [
 ]
 
 # -------------------------
-# Ratings / Filters
+# RATING / FILTER SETTINGS
 # -------------------------
-# Keep original target rating (user requested to retain providers/tags).
-# We will add a NUDE_TAGS blacklist and general URL/metadata checks (Filter A).
-BOORU_TARGET_RATING = "questionable"  # user kept 'questionable'
+BOORU_TARGET_RATING = "questionable"
 GIPHY_RATING = "pg-13"
 TENOR_CONTENT_FILTER = "medium"
 
 # -------------------------
-# NUDE TAGS (Filter Level A)
-# Replaced the naive substring list with a deduped master list + compiled regexes
+# PROVIDER CATEGORIES
 # -------------------------
-_RAW_BLOCKS = [
-    # anatomy / nudity
-    "nude", "naked", "no clothes", "no_clothes", "topless", "bottomless",
-    "nipples", "nip slip", "nipples visible", "nipples_visible", "areola", "areolas",
-    "pussy", "vagina", "vaginal", "labia", "clitoris",
-    "penis", "cock", "dick", "shaft", "balls", "testicles", "scrotum",
-    "anus", "butt", "buttocks", "buttcheeks", "rump",
-    "sex", "sexual", "penetration", "penetrating", "penetrated",
-    "oral", "fellatio", "blowjob", "deepthroat", "deep throat", "cunnilingus", "rimming",
-    "anal", "anal sex", "analingus", "doggystyle", "doggy style", "missionary", "cowgirl",
-    "reverse cowgirl", "69", "sixty nine", "threesome", "orgy", "group sex",
-    "gangbang", "double penetration", "dp", "cum", "cumshot", "cum shot",
-    "ejac", "ejaculation", "orgasm", "masturbation", "masturbate", "fingering",
-    "handjob", "titty fuck", "titty_fuck", "facefuck", "facesitting", "face-sitting",
-    "spanking", "voyeur", "exposed", "exposure", "presenting", "presenting anus",
-    "presenting pussy", "spreading", "spread legs", "spread anus", "spread_anus",
-    "porn", "pornography", "xxx", "18+", "adult", "nsfw", "nsfw_high", "explicit",
-    "rating:explicit", "hentai explicit", "hentai_explicit", "uncensored", "censored", "mosaic",
-    "fetish", "fetishes", "bdsm", "bondage", "dominant", "submissive", "dom", "sub",
-    "kink", "latex", "leather", "humiliation",
-    "vore", "fisting", "watersports", "golden shower", "urophilia",
-    "scat", "bestiality", "zoophilia", "bestial", "incest", "rape", "sexual assault",
-    "non-consensual", "forced",
-    "futanari", "futa", "dickgirl", "newhalf", "hermaphrodite",
-    "shemale", "trap", "trans", "transgirl", "transwoman", "transman",
-    "dildo", "vibrator", "sex toy", "strapon", "strap-on", "anal beads",
-    "cumshot", "creampie", "gokkun", "facial", "creampie anal", "creampie vaginal",
-    "deep throat", "blow job", "fingering", "fingered",
-    "porn comics", "sex comics", "hentai", "ecchi", "yuri", "yaoi",
-    "gay porn", "lesbian porn", "straight porn", "bisexual porn",
-    "swingers", "threesome", "foursome", "sex party",
-    "arse", "buttfuck", "assfuck", "cumshots",
-    "pornstar", "porn star", "escort", "camgirl", "camming", "cam model", "onlyfans", "only fans",
-    "naughty", "lewd", "dirty", "explicit content", "nsfw content",
-    "thiccwithaq", "presenting anus", "looking back", "presenting", "spread anus",
-    "big penis", "big penis", "anal", "fetish", "gorgeous mushroom"
-]
+# These are treated as "safe-sexy" providers: we BOOST them and DO NOT run the nudity scan.
+# They produce suggestive/sexy GIFs but are not generally explicit porn.
+SAFE_NO_SCAN_PROVIDERS = {"waifu_pics", "nekos_best", "nekos_life", "otakugifs"}
 
-# Dedupe & normalize helper
-def _normalize_phrase(s: str) -> str:
-    s = s.lower().strip()
-    # collapse underscores, hyphens, multiple whitespace to single space
-    s = re.sub(r'[\s\-_]+', ' ', s)
-    return s
-
-_NORMALIZED_BLOCKS = sorted({ _normalize_phrase(t) for t in _RAW_BLOCKS if isinstance(t, str) and t.strip() })
-
-# Build regex patterns for robust matching (allow separators between words)
-def _phrase_to_regex(phrase: str) -> str:
-    parts = [re.escape(p) for p in phrase.split()]
-    # allow any run of space/underscore/hyphen between words
-    pattern = r'\b' + r'[\s\-_]+' .join(parts) + r'\b'
-    return pattern
-
-_BLOCKED_REGEX = [re.compile(_phrase_to_regex(p), re.IGNORECASE) for p in _NORMALIZED_BLOCKS]
-
-def contains_nude_indicators(text: str) -> bool:
-    """
-    Robust check for nudity indicators:
-    - normalizes separators/case
-    - quick substring check against normalized block phrases
-    - then regex checks for word-boundary/sep variants
-    """
-    if not text or not isinstance(text, str):
-        return False
-    low = text.lower()
-    # normalize text separators to single spaces for quicker substring checks
-    normalized_text = re.sub(r'[\s\-_]+', ' ', low)
-    # quick substring membership check
-    for phrase in _NORMALIZED_BLOCKS:
-        if phrase in normalized_text:
-            return True
-    # fallback to regex patterns to catch boundary cases and punctuation variants
-    for pat in _BLOCKED_REGEX:
-        if pat.search(text):
-            return True
-    return False
-
-# -------------------------
-# Logging
-# -------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("anime-welcome-bot")
-
-# -------------------------
-# JOIN & LEAVE GREETINGS (full lists preserved)
-# -------------------------
-JOIN_GREETINGS = [
-    "🌸 {display_name} steps into the scene — the anime just got interesting.",
-    "✨ A star descends… oh wait, it's {display_name}! Welcome!",
-    "💫 The universe whispered your name, {display_name}, and here you are.",
-    "🩸 The atmosphere shifts… {display_name} has arrived.",
-    "🌙 Under the moon’s watch, {display_name} enters the VC.",
-    "🎴 Fate draws a new card — it’s {display_name}!",
-    "🦊 Kitsune energy detected — welcome, {display_name}!",
-    "🔥 Power level rising… {display_name} joined the battle!",
-    "🍡 Sweet vibes incoming — welcome, {display_name}!",
-    "⚔️ A warrior steps forward — {display_name} enters the arena.",
-    # ... rest of your long list preserved unchanged ...
-    "🪩 Enter with rhythm — {display_name} is here to shake things up."
-]
-
-LEAVE_GREETINGS = [
-    "🌙 {display_name} fades into the night. Until next time.",
-    "🍃 A gentle breeze carries {display_name} away.",
-    "💫 {display_name} disappears in a swirl of stardust.",
-    "🥀 A petal falls… {display_name} has left.",
-    # ... rest of your long list preserved unchanged ...
-    "🎀 {display_name} untied the bow and disappeared into trouble."
-]
-
-# -------------------------
-# Bot Setup
-# -------------------------
-intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
-intents.voice_states = True
-intents.message_content = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# -------------------------
-# Data load / autosave
-# -------------------------
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump({"join_counts": {}, "used_gifs": {}}, f)
-
-with open(DATA_FILE, "r") as f:
-    data = json.load(f)
-
-if "join_counts" not in data:
-    data["join_counts"] = {}
-if "used_gifs" not in data:
-    data["used_gifs"] = {}
-
-@tasks.loop(seconds=AUTOSAVE_INTERVAL)
-async def autosave_task():
-    try:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.warning(f"Autosave failed: {e}")
-
-# -------------------------
-# Utilities: tag generator + data save
-# -------------------------
-def get_random_tag():
-    # pick 1-3 tags randomly (weights favor 1 or 2 so queries are focused)
-    k = random.choices([1,2,3], weights=[55,35,10])[0]
-    chosen = random.sample(GIF_TAGS, k)
-    return " ".join(chosen)
-
-def save_data():
-    try:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to save data: {e}")
-
-# -------------------------
-# Provider templates & simple public APIs
-# -------------------------
+# Booru family (contains explicit content sometimes) - will be scanned
 BOORU_ENDPOINT_TEMPLATES = {
     "danbooru": [
         "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
@@ -288,48 +126,552 @@ SIMPLE_APIS = {
 }
 
 # -------------------------
-# Fetch GIF: randomized providers + booru with rating:questionable
-# Includes nudity filtering via NUDE_TAGS and URL/metadata scanning (Filter A).
+# Hard & Soft tag lists (Option A)
+# Hard = immediate block (1 match)
+# Soft = block only if 3+ matches
+# -------------------------
+HARD_TAGS = [
+    "pussy","vagina","labia","clitoris",
+    "penis","cock","dick","shaft","testicles","balls",
+    "anus",
+    "sex","penetration","penetrating","penetrated",
+    "blowjob","deepthroat","oral","fellatio","handjob",
+    "cum","cumshot","ejac","orgasm","masturbation",
+    "titty fuck","facefuck","facesitting",
+    "anal sex","doggystyle","cowgirl","69","threesome","foursome",
+    "group sex","orgy","gangbang","double penetration","dp",
+    "creampie","facial",
+    "explicit","xxx","nsfw_high","hentai explicit",
+    "uncensored","porn","pornography","sex toy","strapon",
+    "bestiality","scat","watersports","fisting",
+    # remove sexual orientation words that are harmless; keep anatomy/acts
+]
+
+SOFT_TAGS = [
+    "nude","naked","topless","bottomless",
+    "nipples","areola","lingerie",
+    "erotic","ecchi","sensual","lewd","teasing",
+    "big boobs","boobs","oppai","busty","huge breasts",
+    "ass","booty","thick thighs","thick","jiggle",
+    "milf","mommy","seductive","sexy","fanservice",
+    "cleavage","swimsuit","bikini","underwear","cosplay"
+]
+
+# normalize helper
+def _normalize_text(s: str) -> str:
+    if not s:
+        return ""
+    s = s.lower()
+    s = re.sub(r'[\s\-_]+', ' ', s)
+    return s
+
+def analyze_nudity_indicators(text: str):
+    """
+    Returns (hard_found:bool, soft_count:int)
+    - hard_found True means immediate block
+    - soft_count is number of soft tag matches
+    """
+    if not text or not isinstance(text, str):
+        return False, 0
+    normalized = _normalize_text(text)
+
+    # HARD check
+    for h in HARD_TAGS:
+        if h in normalized:
+            return True, 0
+
+    # SOFT count
+    soft_count = 0
+    for s in SOFT_TAGS:
+        if s in normalized:
+            soft_count += 1
+
+    return False, soft_count
+
+def contains_nude_indicators(text: str) -> bool:
+    """
+    Implement Option A:
+    - If any HARD tag found -> block
+    - If soft_count >= 3 -> block
+    - Otherwise allow
+    """
+    hard, soft_count = analyze_nudity_indicators(text)
+    if hard:
+        return True
+    if soft_count >= 3:
+        return True
+    return False
+
+# -------------------------
+# Exclude list for illegal/underage tags (always exclude from booru queries)
+# -------------------------
+EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
+
+# -------------------------
+# Logging
+# -------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("anime-welcome-bot")
+
+# -------------------------
+# JOIN & LEAVE GREETINGS (copied / preserved)
+# -------------------------
+JOIN_GREETINGS = [
+    "🌸 {display_name} steps into the scene — the anime just got interesting.",
+    "✨ A star descends… oh wait, it's {display_name}! Welcome!",
+    "💫 The universe whispered your name, {display_name}, and here you are.",
+    "🩸 The atmosphere shifts… {display_name} has arrived.",
+    "🌙 Under the moon’s watch, {display_name} enters the VC.",
+    "🎴 Fate draws a new card — it’s {display_name}!",
+    "🦊 Kitsune energy detected — welcome, {display_name}!",
+    "🔥 Power level rising… {display_name} joined the battle!",
+    "🍡 Sweet vibes incoming — welcome, {display_name}!",
+    "⚔️ A warrior steps forward — {display_name} enters the arena.",
+    "🌬️ A soft breeze carries {display_name} into the VC.",
+    "🎇 Fireworks explode — {display_name} is here!",
+    "🕊️ The white dove brings peace — {display_name} has arrived.",
+    "🐾 Nya~ {display_name} appears with adorable energy.",
+    "🌌 A cosmic traveler, {display_name}, has joined us.",
+    "🎋 May luck bless you, {display_name} — welcome!",
+    "🧚 A fairy sparkles — oh, it’s just {display_name} arriving.",
+    "🔮 The prophecy foretold your arrival, {display_name}.",
+    "💥 Impact detected! {display_name} landed in the VC.",
+    "🍃 A new leaf blows in — {display_name} is here.",
+    "🐉 A dragon stirs… {display_name} has joined.",
+    "🎐 The wind chimes sing — welcome, {display_name}.",
+    "🪄 Magic surges — {display_name} enters.",
+    "🪽 Angelic presence detected — hello, {display_name}.",
+    "🌈 A rainbow leads {display_name} to the VC.",
+    "🍀 Lucky day! {display_name} has joined us.",
+    "🌓 Between light and shadow stands {display_name}.",
+    "🗡️ A rogue with silent steps… {display_name} enters.",
+    "🥋 A disciplined hero arrives — {display_name}!",
+    "💎 A rare gem walks in — {display_name} is here.",
+    "🔔 The bells chime — welcome, {display_name}.",
+    "🌟 A burst of stardust — {display_name} arrived!",
+    "🍁 Autumn breeze brings {display_name}.",
+    "🥀 Elegance enters the room — {display_name}.",
+    "💼 Professional energy detected — {display_name} joins.",
+    "🪷 Blooming in grace — welcome, {display_name}.",
+    "🎧 Headphones on — {display_name} is ready.",
+    "😪 Sleepy aura… {display_name} still joins anyway.",
+    "🕶️ Cool protagonist vibes — hello, {display_name}.",
+    "🎞️ New episode unlocked — starring {display_name}.",
+    "📸 Snapshot moment — {display_name} entered.",
+    "🚀 Launch successful — {display_name} has joined.",
+    "🌪️ A whirlwind brings {display_name}.",
+    "🔔 Ding dong — {display_name} is here.",
+    "🍓 Sweetness overload — {display_name} joins.",
+    "🍷 Classy entrance by {display_name}.",
+    "🐺 Lone wolf {display_name} enters silently.",
+    "🌤️ Sunshine follows {display_name} into the VC.",
+    "❄️ A cold breeze… {display_name} has arrived.",
+    "⚡ A spark ignites — welcome, {display_name}.",
+    "🎃 Spooky aura — {display_name} appears.",
+    "🛡️ Protector {display_name} enters the realm.",
+    "🔗 A bond strengthens — {display_name} joins.",
+    "🐼 Cute and chill — welcome, {display_name}.",
+    "🍙 Rice ball hero {display_name} arrives.",
+    "📚 A scholar enters — {display_name}.",
+    "💼 CEO of vibes — {display_name} has arrived.",
+    "🎤 Mic check — {display_name} is in!",
+    "🔥 Rising flame — {display_name} joins.",
+    "🌠 A shooting star — welcome, {display_name}.",
+    "🛸 UFO sighting — {display_name} has landed.",
+    "🌊 Ocean waves bring {display_name}.",
+    "🦄 Magical sparkle — {display_name} appears.",
+    "🧁 Sweet treat {display_name} enters.",
+    "🔮 Mystic portal opens — {display_name} steps in.",
+    "🪽 Feather drifts… {display_name} has arrived.",
+    "🎡 Carnival vibe — welcome, {display_name}.",
+    "🍣 Sushi spirit — {display_name} joins the feast.",
+    "🦋 Butterfly wings lead {display_name} here.",
+    "🐉 Dragon’s roar announces {display_name}.",
+    "👑 Royal presence detected — {display_name}.",
+    "🌹 A rose blooms — {display_name} appears.",
+    "💫 Fate shifts — {display_name} enters.",
+    "🧊 Ice cool arrival — {display_name}.",
+    "🧸 Soft steps — {display_name} appears.",
+    "🪬 Blessed vibes — welcome, {display_name}.",
+    "📀 Retro energy — {display_name} pops in.",
+    "🌾 Calm fields welcome {display_name}.",
+    "🛞 Rolling in smoothly — {display_name}.",
+    "🔥 Your aura lit up the VC, {display_name}.",
+    "🎀 A cute bow appears — {display_name} is here!",
+    "🦉 Night owl {display_name} arrives.",
+    "🪁 Flying in — welcome, {display_name}.",
+    "🌌 A cosmic ripple — {display_name} entered.",
+    "🕯️ A warm flame glows — {display_name} joined.",
+    "💍 Precious presence — {display_name}.",
+    "🎒 Adventure awaits — {display_name} joins.",
+    "📚 Story continues — {display_name} appears.",
+    "⚙️ Mechanized entrance — {display_name} enters.",
+    "🎶 A melody begins — welcome, {display_name}.",
+    "🌈 Your aura colors the VC, {display_name}.",
+    "🌀 Dramatic cut-in — {display_name} joins!",
+    # extended flirty
+    "🔥 {display_name} glides in like a slow-burning spoiler — and suddenly everyone's night has a plot twist.",
+    "😉 Well, hello trouble — {display_name} decided to show up.",
+    "😏 Someone call the spotlight — {display_name} just entered the scene.",
+    "💋 Oh? {display_name} is here. Someone's feeling dangerous.",
+    "😈 Alert: {display_name} entered. Expect mischief and charm.",
+    "🍸 {display_name} arrived — drinks, drama, and delightful chaos.",
+    "🌶️ Spice level rising… {display_name} just joined.",
+    "🖤 {display_name} strolled in like they owe the world an apology.",
+    "💫 The plot thickens now that {display_name} has appeared.",
+    "🎲 Risky move: {display_name} showed up and we're all losing our cool.",
+    "🕶️ Bold entrance by {display_name}. Attitude: 100.",
+    "🎯 Target acquired — {display_name} is on the scene.",
+    "🌙 Midnight mischief incoming because {display_name} is here.",
+    "✨ If charisma were a crime, {display_name} would be serving life.",
+    "🍷 Classy and a little dangerous — {display_name} has arrived.",
+    "🖤 {display_name} just lowered the tone of the room in the best way.",
+    "🎭 Drama upgrade: starring {display_name} in tonight's chaos.",
+    "🔥 Someone turn on the fan — {display_name} brought the heat.",
+    "💼 {display_name} walked in and instantly made everything complicated.",
+    "🎧 Soundtrack change — {display_name} just dropped the bass.",
+    "🪄 Magic? No — just {display_name} doing their thing.",
+    "🍒 Sweet with a hint of trouble — hello {display_name}.",
+    "⚡ Quick warning: {display_name} energizes bad ideas.",
+    "🦊 Sly and irresistible — {display_name} joins the party.",
+    "🌹 Roses are cliché, but {display_name} is not — welcome.",
+    "📸 Pose for the chaos — {display_name} has arrived.",
+    "🚀 {display_name} entered and launched everyone's expectations.",
+    "💥 Subtlety left the building when {display_name} walked in.",
+    "🪩 Glitter and wrong decisions — thanks for coming, {display_name}.",
+    "🩶 Dark charm alert: {display_name} stepped in.",
+    "💃 Someone set the music — {display_name} is ready to stir things up.",
+    "🔮 I can't predict the future, but {display_name} usually means late-night plans.",
+    "🍯 Sweet talker spotted — {display_name} has joined.",
+    "🪤 You walked into temptation — hi {display_name}.",
+    "🎟️ VIP access granted — {display_name} showed up fashionably late.",
+    "🗝️ Keys to chaos delivered by {display_name}.",
+    "🦋 Flirtation levels rising — {display_name} is in the room.",
+    "💡 Bright idea: follow {display_name} at your own risk.",
+    "📚 There goes the plot twist — {display_name} arrived.",
+    "🌊 Tides turned — {display_name} just made waves.",
+    "🧊 Cold look, hot entrance — {display_name} is here.",
+    "🕯️ Candlelit mischief begins now that {display_name} joined.",
+    "🎰 All bets on {display_name} — and the odds are deliciously skewed.",
+    "🍓 {display_name} rolled in and suddenly dessert is mandatory.",
+    "📯 Sound the horn — {display_name} is in the building.",
+    "🧭 Lost? No — just following {display_name}'s magnetic pull.",
+    "🌪️ Chaos tasteful enough to be art — thanks {display_name}.",
+    "🛋️ Softer than a threat: welcome {display_name}.",
+    "🧨 Short fuse, big effect — {display_name} is here.",
+    "🎈 Innocent smile, guilty intentions — hi {display_name}.",
+    "💼 Corporate mischief courtesy of {display_name}.",
+    "🪞Mirror check: yep, {display_name} still looks like trouble.",
+    "🍬 Sweet façade, sticky consequences — welcome, {display_name}.",
+    "🏮 Lanterns flicker — {display_name} lights up the night.",
+    "🎤 Mic dropped — {display_name} doesn't need to say a thing.",
+    "🪩 Your entrance made the playlist skip — thank you {display_name}.",
+    "🦄 Rare and slightly scandalous — {display_name} appears.",
+    "🕶️ Cool glare detected. {display_name} just arrived.",
+    "🍾 Pop the cork — {display_name} deserves the celebration.",
+    "🛡️ Charming enough to disarm — {display_name} walks in.",
+    "💃 The room got rhythm when {display_name} took a step.",
+    "🧩 Missing piece found: {display_name} completes the puzzle.",
+    "🌈 Colorful trouble has arrived — hey {display_name}.",
+    "🪙 Heads up: {display_name} flips expectations and pockets secrets.",
+    "🖋️ Signature entrance — {display_name} signs in with flair.",
+    "🎯 You came, you saw, you slayed — welcome {display_name}.",
+    "🍷 Velvet tone and sharp edges — that's {display_name}.",
+    "🔞 Mature vibes only — {display_name} enters the room.",
+    "🕯️ Soft light, sharper intentions — hello {display_name}.",
+    "🏷️ Tagged: irresistible. {display_name} checks in.",
+    "🎩 Classy with attitude — {display_name} tips the hat.",
+    "🫦 Lips sealed, eyes loud — {display_name} is here.",
+    "📅 Tonight's agenda: {display_name} causes a scene.",
+    "🛋️ Stay seated — {display_name} prefers to steal the show.",
+    "🧨 Quiet before the fun — {display_name} just arrived.",
+    "🔗 Chains optional, charm mandatory — welcome {display_name}.",
+    "🌀 Dizzying presence detected — {display_name} joins.",
+    "💼 Work hard, tease harder — {display_name} is in the VC.",
+    "🌒 Shadows lengthen when {display_name} shows up.",
+    "🥀 Pretty and a little poisonous — hi {display_name}.",
+    "📯 Announce the mischief — {display_name} has entered.",
+    "🔥 Slow burn starter: {display_name} has arrived.",
+    "🦩 Graceful and dangerous — welcome, {display_name}.",
+    "💬 Conversation killer: {display_name} just logged on.",
+    "🎀 Cute on purpose, trouble by accident — thanks for coming {display_name}.",
+    "🪬 Lucky strike — {display_name} brings the kind of luck you whisper about.",
+    "🌶️ Too hot to handle, too fun to deny — {display_name} joined.",
+    "🧸 Soft voice, sharp looks — say hello to {display_name}.",
+    "🎲 Double or nothing — {display_name} is ready to play.",
+    "🗝️ Unlocking curiosity: {display_name} has arrived.",
+    "🥂 Raise a glass — {display_name} showed up and the night's improved.",
+    "🕹️ Someone hit the turbo — {display_name} entered the lobby.",
+    "🪓 Cute smile, dangerous plans — welcome {display_name}.",
+    "📸 Snap. Scene. {display_name} just made the highlight reel.",
+    "🔮 Fate called and said: meet {display_name}.",
+    "🪩 Enter with rhythm — {display_name} is here to shake things up."
+]
+
+LEAVE_GREETINGS = [
+    "🌙 {display_name} fades into the night. Until next time.",
+    "🍃 A gentle breeze carries {display_name} away.",
+    "💫 {display_name} disappears in a swirl of stardust.",
+    "🥀 A petal falls… {display_name} has left.",
+    "⚔️ Warrior {display_name} sheaths their blade and exits.",
+    "🌧️ Rain replaces the silence {display_name} leaves behind.",
+    "🔕 The scene quiets… {display_name} is gone.",
+    "🕊️ Fly safely, {display_name}. Until later.",
+    "🎭 Curtain closes for {display_name}.",
+    "📖 Another chapter ends for {display_name}.",
+    "🐾 Pawprints fade — {display_name} left.",
+    "⚡ The energy drops — {display_name} has gone.",
+    "🍂 Autumn wind takes {display_name} away.",
+    "🎐 Wind chimes stop — {display_name} departed.",
+    "🧊 Chill remains… {display_name} exits.",
+    "🪽 Angel glides away — bye {display_name}.",
+    "💌 A final letter… {display_name} left.",
+    "🌫️ Mist clears — {display_name} vanished.",
+    "🪞 Reflection breaks — {display_name} gone.",
+    "🛡️ Protector rests — goodbye, {display_name}.",
+    "🐺 Lone wolf {display_name} slips away.",
+    "❄️ Snow settles — {display_name} logged out.",
+    "🍵 Tea cools — {display_name} has left.",
+    "🎮 Player {display_name} left the lobby.",
+    "🎞️ Scene ends — goodbye, {display_name}.",
+    "🗡️ Blade dimmed — {display_name} exits.",
+    "🍙 The rice ball rolls away… bye {display_name}.",
+    "🎤 Mic muted — {display_name} has departed.",
+    "🧚 Fairy dust fades — farewell, {display_name}.",
+    "🌈 Rainbow disappears — {display_name} gone.",
+    "🐉 Dragon sleeps — {display_name} left.",
+    "🌪️ Calm returns — {display_name} exits.",
+    "🌌 Stars dim — goodbye, {display_name}.",
+    "🪷 Petals close — {display_name} left.",
+    "🕶️ Cool exit — bye {display_name}.",
+    "📸 Snapshot saved — {display_name} left.",
+    "🎒 Adventure paused — {display_name} exits.",
+    "⚙️ Gears stop turning — {display_name} is gone.",
+    "💫 Magic disperses — goodbye, {display_name}.",
+    "🪬 Protection fades — bye, {display_name}.",
+    "📀 Retro fade-out — {display_name} left.",
+    "👑 Royal exit — farewell, {display_name}.",
+    "🦋 Wings flutter away — {display_name} left.",
+    "🎡 Carnival lights dim — {display_name} exits.",
+    "🛸 UFO retreats — {display_name} gone.",
+    "🔥 Flame cools — {display_name} has left.",
+    "🦉 Night silence — {display_name} left.",
+    "🌠 Shooting star vanished — {display_name}.",
+    "🧸 Soft goodbye — {display_name} left.",
+    "🌙 Moon watches {display_name} leave.",
+    "🪁 Kite drifts away — {display_name}.",
+    "🛞 Wheels roll — goodbye, {display_name}.",
+    "🌊 Tide recedes — {display_name} gone.",
+    "💍 Shine fades — {display_name} exits.",
+    "🍣 Last sushi taken — {display_name} left.",
+    "🌱 Seedling rests — {display_name} gone.",
+    "🎀 Ribbon untied — {display_name} exits.",
+    "🍁 Leaf falls — farewell, {display_name}.",
+    "🔗 Chain breaks — {display_name} left.",
+    "🩶 Grey clouds remain — {display_name}.",
+    "🕯️ Candle blows out — {display_name} left.",
+    "🎵 Final note plays — goodbye {display_name}.",
+    "🐉 Dragon tail disappears — {display_name}.",
+    "🏮 Lantern dims — {display_name} leaves.",
+    "🕸️ Web breaks — {display_name} left.",
+    "🌫️ Fog settles — {display_name} exits.",
+    "💔 Heart cracks — {display_name} left the VC.",
+    "🎲 Game over — {display_name} quits.",
+    "🖤 Shadow fades — bye {display_name}.",
+    "🌑 Darkness takes {display_name}.",
+    "🪽 Feather falls — {display_name} gone.",
+    "🌪️ Storm quiet — {display_name} left.",
+    "🍉 Summer fades — {display_name} exits.",
+    "🍂 Rustling stops — {display_name}.",
+    "🌻 Sunflower bows — {display_name} gone.",
+    "🌴 Breeze stops — {display_name} left.",
+    "🍬 Sweetness gone — bye {display_name}.",
+    "🧠 Big brain left — {display_name}.",
+    "🧨 Firework finished — {display_name} left.",
+    "🎯 Target cleared — {display_name} gone.",
+    "🛌 Sleep calls {display_name}.",
+    "🚪 Door closes — {display_name} left.",
+    "⚰️ Dead silence — {display_name} exits.",
+    "📚 Story ends — {display_name}.",
+    "🌒 Fade to black — {display_name} left.",
+    # extended flirty leave lines
+    "💋 {display_name} slipped away — and the room exhaled with regret.",
+    "😈 Gone already? {display_name} leaves a better mess than most create.",
+    "🖤 {display_name} left the stage — manners optional, memories guaranteed.",
+    "🍃 {display_name} faded like smoke; seductive and impossible to hold.",
+    "🔐 Door closed. {display_name} stole the moment and the key.",
+    "🎭 Curtain call for {display_name} — encore not included.",
+    "🥀 {display_name} left; perfection and trouble went with them.",
+    "🍷 {display_name} departed — someone pour a little regret.",
+    "🕯️ The lights dim when {display_name} steps away.",
+    "⚡ {display_name} left a spark and a small disaster.",
+    "🍬 Sweet exit, bitter aftertaste — bye {display_name}.",
+    "🪩 The party lost its playlist when {display_name} left.",
+    "🕶️ {display_name} ghosted with style — classy and cold.",
+    "🔮 {display_name} vanished like a prediction you loved anyway.",
+    "💼 {display_name} logged off and took the drama with them.",
+    "🌙 Night swooped in after {display_name} left the room.",
+    "🎯 {display_name} left — aim: flawless. Impact: unforgettable.",
+    "🦊 Sly departure from {display_name}; the mystery deepens.",
+    "🍓 {display_name} drifted away leaving sticky memories.",
+    "🛋️ {display_name} retired to the shadows — the couch remembers.",
+    "🧨 Exit with a bang — {display_name} didn't leave quietly.",
+    "🦋 {display_name} flew off; everyone still smells the chaos.",
+    "🎲 {display_name} left the table and the stakes rose higher.",
+    "🍾 {display_name} popped out — classy exit, dramatic effect.",
+    "🗝️ {display_name} closed the door on trouble and goodbyes.",
+    "🩶 The room lost its edge when {display_name} left.",
+    "📯 Announce: {display_name} has departed — rumors welcomed.",
+    "🌹 {display_name}'s exit felt like a rose dropped in slow motion.",
+    "🧭 {display_name} walked away and left a trail we all want to follow.",
+    "🪞 Reflection left the mirror — {display_name} is gone.",
+    "🪤 The trapdoor opened; {display_name} vanished with a wink.",
+    "🔞 Mature exit: {display_name} left the scene while raising eyebrows.",
+    "🕯️ {display_name} departed — the candle still flickers from their touch.",
+    "🥂 Cheers to {display_name} — left us smiling and slightly guilty.",
+    "📸 {display_name} left the frame; the photo's still hot.",
+    "🧩 {display_name} removed themselves and somehow completed the puzzle.",
+    "🌪️ A quiet storm left with {display_name}.",
+    "🎩 {display_name} tipped their hat and walked away like a plot twist.",
+    "🍷 The bottle's emptier now that {display_name} is gone.",
+    "🦉 Night feels smarter when {display_name} takes off.",
+    "🌊 {display_name} drifted out; the tide kept the memory.",
+    "🪬 Luck shifted when {display_name} left the room.",
+    "🛡️ Protector gone — {display_name} exits with dangerous grace.",
+    "🔗 {display_name} unlinked themselves and left us all a little looser.",
+    "📚 The chapter ended when {display_name} left; we read it twice.",
+    "🧠 Clever exit — {display_name} left us thinking about bad decisions.",
+    "🎭 Stage empty; {display_name} took the spotlight with them.",
+    "🍒 Leaving like a sin dressed as dessert — bye {display_name}.",
+    "🪁 {display_name} drifted away, playful and untouchable.",
+    "🗡️ Sharp goodbye — {display_name} left with teeth and style.",
+    "🎶 The last note faded when {display_name} stepped away.",
+    "🪙 {display_name} vanished with a trick up their sleeve.",
+    "🦄 {display_name} left; the rare air still hums.",
+    "🕊️ {display_name} flew off and left a few hearts unsettled.",
+    "✨ Exit stage left: {display_name} made it dramatic as always.",
+    "🍂 {display_name} fell away like a leaf—beautiful and brief.",
+    "🧸 {display_name} walked out smiling; the room feels oddly betrayed.",
+    "💥 {display_name} left like fireworks — loud and unforgettable.",
+    "🍭 {display_name} left a sweet mess on the floor.",
+    "🕯️ Flicker gone: {display_name} departed and the glow lingered.",
+    "🔔 {display_name} rang out and then vanished into the night.",
+    "🦩 Stylish exit by {display_name} — elegant with a sting.",
+    "📀 The record scratched when {display_name} took their leave.",
+    "🪓 A clean cut goodbye — {display_name} left the scene.",
+    "🌈 {display_name} left a streak of color and trouble.",
+    "🏮 Lanterns dimmed as {display_name} disappeared down the lane.",
+    "🎤 Microphone dropped; {display_name} departed without an encore.",
+    "🥀 {display_name} left; the bouquet still smells like risk.",
+    "🪞 Mirror emptied — {display_name} is nowhere to be found.",
+    "🪩 The last dancer left: {display_name}. The floor misses them.",
+    "🕶️ {display_name} slipped away wearing an attitude and sunglasses.",
+    "🧭 Direction lost when {display_name} turned away and walked off.",
+    "🎯 Closing target: {display_name} left, aim impeccable.",
+    "📅 Calendar note: {display_name} left and the night shifted tone.",
+    "🧪 {display_name} conducted an experiment and then quietly exited.",
+    "🔮 {display_name} left like a prophecy fulfilled—mysterious and satisfying.",
+    "🪬 The charm left with {display_name}; good luck tries to follow.",
+    "🔞 {display_name} left—no kids allowed in the memory lane.",
+    "🍷 {display_name} left and the glass still tastes like their name.",
+    "🪣 Clean exit: {display_name} wiped the slate and left an impression.",
+    "🎲 {display_name} rolled away and the dice keep whispering.",
+    "🗝️ {display_name} took the secret and left us grinning.",
+    "📸 Photo fades when {display_name} leaves, but the smile remains.",
+    "🧨 {display_name} walked off—residue of excitement remains.",
+    "🥂 {display_name} toasted the room with their exit.",
+    "🦊 Cunning goodbye—{display_name} left and the foxes cheered.",
+    "🔗 Links broken; {display_name} left the chain of events unfinished.",
+    "🛞 Wheels stop — {display_name} is gone but the ride lingers.",
+    "🕯️ The flame dipped as {display_name} stepped into the dark.",
+    "🧩 {display_name} left and the pieces still fit a little wrong after.",
+    "🎀 {display_name} untied the bow and disappeared into trouble."
+]
+
+# -------------------------
+# Bot Setup
+# -------------------------
+intents = discord.Intents.default()
+intents.guilds = True
+intents.members = True
+intents.voice_states = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# -------------------------
+# Data load / autosave
+# -------------------------
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"join_counts": {}, "used_gifs": {}}, f)
+
+with open(DATA_FILE, "r") as f:
+    data = json.load(f)
+
+if "join_counts" not in data:
+    data["join_counts"] = {}
+if "used_gifs" not in data:
+    data["used_gifs"] = {}
+
+@tasks.loop(seconds=AUTOSAVE_INTERVAL)
+async def autosave_task():
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Autosave failed: {e}")
+
+def save_data():
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save data: {e}")
+
+# -------------------------
+# Helper: choose provider pool with boosting
+# Balanced approach: favor safe providers but allow boorus & tenor/giphy
+# -------------------------
+def build_provider_pool():
+    pool = []
+    # Boost safe providers (higher weight)
+    pool.extend(["waifu_pics"] * 8)
+    pool.extend(["nekos_best"] * 6)
+    pool.extend(["nekos_life"] * 6)
+    pool.extend(["otakugifs"] * 5)
+
+    # tenor/giphy moderate
+    if TENOR_API_KEY:
+        pool.extend(["tenor"] * 4)
+    if GIPHY_API_KEY:
+        pool.extend(["giphy"] * 4)
+
+    # boorus (less weight but present)
+    pool.extend(list(BOORU_ENDPOINT_TEMPLATES.keys()))  # each once
+    return pool
+
+# -------------------------
+# GIF fetch function (tries many providers + applies scanning rules)
 # -------------------------
 async def fetch_gif(user_id):
-    """
-    Attempt to fetch a media file for the user that has not been sent before.
-    - random provider per attempt
-    - random tag(s) per attempt
-    - booru queries include rating:questionable and exclude illegal tags
-    Returns (bytes, filename, url) or (None, None, None)
-    """
     user_key = str(user_id)
     used = data["used_gifs"].setdefault(user_key, [])
 
-    # Tags we must never include
-    EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
-
     def build_booru_query(positive_tags):
-        # include rating:questionable and exclude illegal tags
         tags = [f"rating:{BOORU_TARGET_RATING}"]
         tags.extend(positive_tags.split())
         tags.extend([f"-{t}" for t in EXCLUDE_TAGS])
         tag_str = " ".join(tags)
         return tag_str, quote_plus(tag_str)
 
-    # Build provider pool (include keys if provided)
-    providers = []
-    if TENOR_API_KEY:
-        providers.append("tenor")
-    if GIPHY_API_KEY:
-        providers.append("giphy")
-    # add simple public APIs
-    providers.extend(["waifu_pics","nekos_best","nekos_life","otakugifs"])
-    # add booru family
-    providers.extend(list(BOORU_ENDPOINT_TEMPLATES.keys()))
-    # shuffle providers so selection is randomized
+    providers = build_provider_pool()
     random.shuffle(providers)
 
     async with aiohttp.ClientSession() as session:
         for attempt in range(FETCH_ATTEMPTS):
             provider = random.choice(providers)
-            positive = get_random_tag()
+            positive = random.choice(GIF_TAGS)  # pick single spicy tag (focused)
             tag_str, tag_query = build_booru_query(positive)
 
             if DEBUG_FETCH:
@@ -364,16 +706,18 @@ async def fetch_gif(user_id):
                             if not gif_url:
                                 continue
 
-                            # compile textual metadata to scan for nudity indicators
+                            # combine textual metadata
                             combined_meta = " ".join([
                                 str(r.get("content_description") or ""),
                                 " ".join(r.get("tags") or [] if isinstance(r.get("tags"), list) else [str(r.get("tags") or "")]),
                                 gif_url
                             ])
 
-                            if contains_nude_indicators(combined_meta):
+                            # Tenor: moderate scan using hard/soft rules
+                            hard, soft_count = analyze_nudity_indicators(combined_meta)
+                            if hard or soft_count >= 3:
                                 if DEBUG_FETCH:
-                                    logger.info(f"[tenor] skipped nudity indicator: {combined_meta[:80]}")
+                                    logger.info(f"[tenor] skipped nudity indicator: hard={hard} soft_count={soft_count}")
                                 continue
 
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
@@ -420,16 +764,11 @@ async def fetch_gif(user_id):
                             if not gif_url:
                                 continue
 
-                            # compile textual metadata to scan for nudity indicators
-                            combined_meta = " ".join([
-                                str(item.get("title") or ""),
-                                str(item.get("slug") or ""),
-                                gif_url
-                            ])
-
-                            if contains_nude_indicators(combined_meta):
+                            combined_meta = " ".join([str(item.get("title") or ""), str(item.get("slug") or ""), gif_url])
+                            hard, soft_count = analyze_nudity_indicators(combined_meta)
+                            if hard or soft_count >= 3:
                                 if DEBUG_FETCH:
-                                    logger.info(f"[giphy] skipped nudity indicator: {combined_meta[:80]}")
+                                    logger.info(f"[giphy] skipped nudity indicator: hard={hard} soft_count={soft_count}")
                                 continue
 
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
@@ -459,11 +798,10 @@ async def fetch_gif(user_id):
                 except Exception:
                     continue
 
-            # ---------- SIMPLE PUBLIC APIS ----------
-            if provider in ("waifu_pics","nekos_best","nekos_life"):
+            # ---------- SAFE-NO-SCAN PROVIDERS (boosted) ----------
+            if provider in SAFE_NO_SCAN_PROVIDERS:
                 try:
                     if provider == "waifu_pics":
-                        # user keeps nsfw categories — but we scan for nudity in URLs/metadata and skip any explicit ones
                         category = random.choice(SIMPLE_APIS["waifu_pics"]["categories_nsfw"])
                         url = f"{SIMPLE_APIS['waifu_pics']['base']}/nsfw/{category}"
                         async with session.get(url, timeout=10) as resp:
@@ -474,12 +812,7 @@ async def fetch_gif(user_id):
                             if not gif_url:
                                 continue
 
-                            # quick URL/filename check for nudity indicators
-                            if contains_nude_indicators(gif_url):
-                                if DEBUG_FETCH:
-                                    logger.info(f"[waifu_pics] skipped based on URL: {gif_url}")
-                                continue
-
+                            # NO scanning here (safe provider). Still avoid duplicates.
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
                             if gif_hash in used:
                                 continue
@@ -516,14 +849,6 @@ async def fetch_gif(user_id):
                                 gif_url = r.get("url") or r.get("file")
                                 if not gif_url:
                                     continue
-
-                                # metadata check
-                                combined_meta = " ".join([str(r.get("source") or ""), gif_url])
-                                if contains_nude_indicators(combined_meta):
-                                    if DEBUG_FETCH:
-                                        logger.info(f"[nekos_best] skipped nudity indicator: {combined_meta[:80]}")
-                                    continue
-
                                 gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
                                 if gif_hash in used:
                                     continue
@@ -555,12 +880,6 @@ async def fetch_gif(user_id):
                             gif_url = payload.get("url") or payload.get("image") or payload.get("result")
                             if not gif_url:
                                 continue
-
-                            if contains_nude_indicators(gif_url):
-                                if DEBUG_FETCH:
-                                    logger.info(f"[nekos_life] skipped based on URL: {gif_url}")
-                                continue
-
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
                             if gif_hash in used:
                                 continue
@@ -581,53 +900,43 @@ async def fetch_gif(user_id):
                                     return b, name, gif_url
                             except Exception:
                                 continue
+
+                    elif provider == "otakugifs":
+                        reaction = quote_plus(positive)
+                        url = f"https://otakugifs.xyz/api/gif?reaction={reaction}"
+                        async with session.get(url, timeout=10) as resp:
+                            if resp.status != 200:
+                                continue
+                            payload = await resp.json()
+                            gif_url = payload.get("url") or payload.get("gif") or payload.get("file") or payload.get("result")
+                            if not gif_url and isinstance(payload, str):
+                                gif_url = payload
+                            if not gif_url:
+                                continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=15) as gr:
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = os.path.splitext(gif_url)[1] or ".gif"
+                                    name = f"otakugifs_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
+                            except Exception:
+                                continue
                 except Exception:
                     continue
 
-            # ---------- OtakuGIFs (simple) ----------
-            if provider == "otakugifs":
-                try:
-                    reaction = quote_plus(positive)
-                    url = f"https://otakugifs.xyz/api/gif?reaction={reaction}"
-                    async with session.get(url, timeout=10) as resp:
-                        if resp.status != 200:
-                            continue
-                        payload = await resp.json()
-                        gif_url = payload.get("url") or payload.get("gif") or payload.get("file") or payload.get("result")
-                        if not gif_url and isinstance(payload, str):
-                            gif_url = payload
-                        if not gif_url:
-                            continue
-
-                        if contains_nude_indicators(gif_url):
-                            if DEBUG_FETCH:
-                                logger.info(f"[otakugifs] skipped based on URL: {gif_url}")
-                            continue
-
-                        gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                        if gif_hash in used:
-                            continue
-                        try:
-                            async with session.get(gif_url, timeout=15) as gr:
-                                if gr.status != 200:
-                                    continue
-                                ctype = gr.content_type or ""
-                                if "html" in ctype:
-                                    continue
-                                b = await gr.read()
-                                ext = os.path.splitext(gif_url)[1] or ".gif"
-                                name = f"otakugifs_{gif_hash[:8]}{ext}"
-                                used.append(gif_hash)
-                                if len(used) > MAX_USED_GIFS_PER_USER:
-                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                save_data()
-                                return b, name, gif_url
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
-
-            # ---------- BOORUS (rating:questionable) ----------
+            # ---------- BOORUS family (scan required) ----------
             if provider in BOORU_ENDPOINT_TEMPLATES:
                 templates = BOORU_ENDPOINT_TEMPLATES.get(provider, [])
                 if not templates:
@@ -641,9 +950,7 @@ async def fetch_gif(user_id):
                         try:
                             posts = await resp.json()
                         except Exception:
-                            # skip non-json responses
                             continue
-                        # normalize posts to a list
                         if isinstance(posts, dict):
                             if "posts" in posts:
                                 posts = posts["posts"]
@@ -679,26 +986,29 @@ async def fetch_gif(user_id):
                             # defensive: skip explicit if rating marker present
                             rating = (post.get("rating") or "").lower()
                             if rating.startswith("e"):
-                                # skip explicit
                                 if DEBUG_FETCH:
                                     logger.info(f"[{provider}] skipped rating explicit for post id {post.get('id')}")
                                 continue
-                            # skip if illegal tags present in tag strings
+
                             tags_field = ""
                             if isinstance(post.get("tag_string"), str):
                                 tags_field = post.get("tag_string")
                             if isinstance(post.get("tags"), str) and not tags_field:
                                 tags_field = post.get("tags")
 
-                            # SKIP full nudity / genitals / explicit
                             combined_meta = " ".join([str(tags_field or ""), str(post.get("description") or ""), str(post.get("source") or ""), str(gif_url or "")])
-                            if contains_nude_indicators(combined_meta):
+
+                            # run Option A scan: HARD immediate, SOFT count
+                            hard, soft_count = analyze_nudity_indicators(combined_meta)
+                            if hard or soft_count >= 3:
                                 if DEBUG_FETCH:
-                                    logger.info(f"[{provider}] skipped due to nude indicators in metadata: {combined_meta[:120]}")
+                                    logger.info(f"[{provider}] skipped due to nudity: hard={hard} soft_count={soft_count}")
                                 continue
 
+                            # skip if illegal tags present
                             if any(ex in (tags_field or "") for ex in EXCLUDE_TAGS):
                                 continue
+
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
                             if gif_hash in used:
                                 continue
@@ -722,7 +1032,7 @@ async def fetch_gif(user_id):
                 except Exception:
                     continue
 
-        # if here, no provider returned a fresh file for this user this call
+        # no valid gif found in attempts
     return None, None, None
 
 # -------------------------
@@ -796,7 +1106,6 @@ async def on_voice_state_update(member, before, after):
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                 embed.set_image(url=f"attachment://{gif_name}")
                 if text_channel:
-                    # NO server mention — embed + GIF only
                     await text_channel.send(embed=embed, file=file_server)
 
                 # recreate file for DM (avoid stream reuse)
