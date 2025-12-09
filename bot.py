@@ -1,17 +1,18 @@
-# bot_spiciest_final_v3.py
-# Final safe-spicy anime welcome bot v3
+# bot_spiciest_final_v3_with_vcjoin.py
+# Final safe-spicy anime welcome bot v3 (voice-join enabled)
 # - 15+ safe anime providers (no booru/porn)
 # - Option A nudity rules (HARD always block, SOFT block if 3+ matches)
 # - Random provider + random tag each request
 # - Per-user no-repeat history (stored in data.json)
 # - 100+ spicy join & leave greetings
 # - Owner commands: !testgif, !setweight, !weights
+# - Bot will JOIN the VC when a user joins a monitored VC and LEAVE when it's alone
 #
 # ENV:
 # TOKEN (required)
 # TENOR_API_KEY, GIPHY_API_KEY, WAIFUIM_API_KEY, WAIFUIT_API_KEY, FLUXPOINT_API_KEY (optional)
 #
-# Run: python bot_spiciest_final_v3.py
+# Run: python bot_spiciest_final_v3_with_vcjoin.py
 
 import os
 import io
@@ -624,7 +625,6 @@ async def fetch_from_waifuapi_alt(session, positive):
 # Provider: latapi (attempt)
 async def fetch_from_latapi(session, positive):
     try:
-        # latapi.pics or similar endpoints sometimes exist; attempt a generic pattern
         candidates = [
             f"https://latapi.pics/api/v1/random?tags={quote_plus(positive)}",
             f"https://latapi.xyz/api/random?tag={quote_plus(positive)}"
@@ -1036,11 +1036,34 @@ async def on_voice_state_update(member, before, after):
     # ignore bots
     if member.bot:
         return
-    guild = member.guild
+
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # JOIN
-    if after.channel and after.channel.id in VC_IDS and (before.channel != after.channel):
+    # 1) Voice join behavior (bot joins VC when monitored user joins)
+    joined_monitored = False
+    if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
+        # A user joined one of the monitored voice channels
+        joined_monitored = True
+        try:
+            voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
+            if voice_client:
+                # if bot is in a different channel, move to this one
+                if voice_client.channel.id != after.channel.id:
+                    try:
+                        await voice_client.move_to(after.channel)
+                    except Exception as e:
+                        logger.warning(f"Failed to move voice client: {e}")
+            else:
+                try:
+                    await after.channel.connect()
+                except Exception as e:
+                    logger.warning(f"Failed to connect to channel: {e}")
+        except Exception as e:
+            logger.warning(f"VC join logic error: {e}")
+
+    # 2) Run existing welcome/goodbye flows when monitored channels trigger (send GIFs and embeds)
+    # JOIN message/gif
+    if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         raw_msg = random.choice(JOIN_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
@@ -1084,8 +1107,8 @@ async def on_voice_state_update(member, before, after):
             except Exception:
                 logger.warning(f"Failed to DM {member.display_name}")
 
-    # LEAVE
-    if before.channel and before.channel.id in VC_IDS and (after.channel != before.channel):
+    # LEAVE message/gif and potential disconnect behavior
+    if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
         raw_msg = random.choice(LEAVE_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
@@ -1122,6 +1145,21 @@ async def on_voice_state_update(member, before, after):
                 await member.send(embed=embed)
             except Exception:
                 logger.warning(f"Failed to DM {member.display_name}")
+
+        # After sending the leave embed, check if bot should disconnect
+        try:
+            voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
+            if voice_client:
+                # Count non-bot members in voice_client.channel
+                non_bot_members = [m for m in voice_client.channel.members if not m.bot]
+                if len(non_bot_members) == 0:
+                    # bot is alone — disconnect
+                    try:
+                        await voice_client.disconnect()
+                    except Exception as e:
+                        logger.warning(f"Failed to disconnect voice client: {e}")
+        except Exception as e:
+            logger.warning(f"VC disconnect logic error: {e}")
 
 # -------------------------
 # Owner/admin commands
