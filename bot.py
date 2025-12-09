@@ -1,4 +1,5 @@
-# bot.py — Optimized Anime Welcome Bot (NSFW | Tenor + Giphy | Multi-VC | No Server Mention)
+# bot.py — Final: Randomized Questionable Anime Welcome Bot
+# Includes many providers incl. Danbooru (rating:questionable) + Tenor/Giphy + public APIs + booru mirrors
 # FULL SCRIPT — copy & paste as-is
 
 import os
@@ -10,73 +11,73 @@ import logging
 import asyncio
 from datetime import datetime
 from urllib.parse import quote_plus
-
 import aiohttp
 import discord
 from discord.ext import commands, tasks
 
 # -------------------------
-# CONFIG
+# CONFIG - set these as env vars or export them before running
 # -------------------------
 TOKEN = os.getenv("TOKEN")
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
+DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 
-# MULTIPLE VCs (same server)
+# MULTIPLE VCs (same server) - replace with your actual VC IDs
 VC_IDS = [
     1353875050809524267,
     21409170559337762980,
     1353882705246556220
 ]
 
-# GREETING TEXT CHANNEL
-VC_CHANNEL_ID = 1446752109151260792   # GREETING CHANNEL
+# TEXT CHANNEL TO POST EMBEDS (replace with your channel ID)
+VC_CHANNEL_ID = 1446752109151260792
 
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
-MAX_USED_GIFS_PER_USER = 500  # keep history bounded to avoid unbounded data growth
+MAX_USED_GIFS_PER_USER = 1000
+FETCH_ATTEMPTS = 40   # aggressive: will try many provider/tag combos before giving up
 
 # -------------------------
-# GIF TAGS (combined: your requested + optimized)
+# GIF TAGS - your spicy/full list (preserved + a few extras)
 # -------------------------
 GIF_TAGS = [
-    # Core ecchi / waifu
-    "anime ass", "anime bikini girl", "anime boobs", "anime booty",
-    "anime booty shorts", "anime ecchi", "anime fanservice",
-    "anime girl", "anime girl ecchi", "anime hot girl", "anime jiggle",
-    "anime lingerie girl", "anime milf", "anime milf horny",
-    "anime older waifu", "anime oppai", "anime seductive",
-    "anime sensual", "anime sexy", "anime suggestive",
-    "anime thick", "anime thick thighs", "anime thighs",
-    "anime teasing anime girl",
-    "ecchi anime girl", "ecchi fighting anime",
-    "anime swimsuit ecchi", "anime blushing girl",
-
-    # Waifu / Game
-    "waifu ecchi", "genshin impact waifu", "game waifu",
-
-    # Romantic / Hug / Kiss
-    "anime kiss", "anime couple kiss", "anime romantic",
-    "romantic anime", "anime hug", "cute anime hug",
-    "anime love", "anime couple hug",
-
-    # Explicit-ish (requested by you)
-    "sexy anime girl", "horny anime", "horny waifu",
-    "sexy milf anime", "romantic hentai", "ecchi kiss", "ecchi hug"
+    "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
+    "anime ass","anime milf","anime girl","anime girl ecchi",
+    "genshin impact waifu","game waifu","anime hot girl","anime seductive",
+    "anime suggestive","ecchi anime girl","anime fanservice","anime ero",
+    "waifu ecchi","anime blush ecchi","ecchi fighting anime","anime swimsuit ecchi",
+    "anime thick","anime oppai","anime jiggle","anime thighs",
+    "anime thick thighs","anime booty","anime booty shorts","anime lingerie girl",
+    "anime bikini girl","anime teasing anime girl","anime mature woman","anime older waifu",
+    "anime charm girl","anime flirty","anime sensual","anime blushing girl",
+    # romantic / kiss / hug
+    "anime kiss","anime couple kiss","anime romantic","romantic anime",
+    "anime hug","cute anime hug","anime love","anime couple hug",
+    # user requested explicit-ish tags (kept; boorus will use rating:questionable)
+    "sexy anime girl","horny anime","horny waifu","sexy milf anime",
+    "anime milf horny","romantic hentai","ecchi kiss","ecchi hug",
+    # extras for variety
+    "anime cleavage","anime cosplay sexy","anime playful pose","anime seductive glance",
+    "anime softcore","anime teasing pose","anime thighfocus","anime chest focus"
 ]
 
-# keep as you asked
+# -------------------------
+# Ratings / Filters
+# -------------------------
+# We'll use rating:questionable in booru queries and explicitly filter out 'rating:explicit' and illegal tags.
+BOORU_TARGET_RATING = "questionable"  # 'questionable' allows ecchi/lewd but aims to avoid full explicit
 GIPHY_RATING = "pg-13"
 TENOR_CONTENT_FILTER = "medium"
 
 # -------------------------
-# LOGGING
+# Logging
 # -------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("anime-bot")
+logger = logging.getLogger("anime-welcome-bot")
 
 # -------------------------
-# JOIN & LEAVE GREETINGS (original + extended)
+# JOIN & LEAVE GREETINGS (deepened, mature / double-meaning)
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} steps into the scene — the anime just got interesting.",
@@ -171,9 +172,8 @@ JOIN_GREETINGS = [
     "🎶 A melody begins — welcome, {display_name}.",
     "🌈 Your aura colors the VC, {display_name}.",
     "🌀 Dramatic cut-in — {display_name} joins!",
-
-    # -- extended flirty/mature additions --
-    "🔥 {display_name} walked in and the thermostat just begged for mercy.",
+    # extended flirty
+    "🔥 {display_name} glides in like a slow-burning spoiler — and suddenly everyone's night has a plot twist.",
     "😉 Well, hello trouble — {display_name} decided to show up.",
     "😏 Someone call the spotlight — {display_name} just entered the scene.",
     "💋 Oh? {display_name} is here. Someone's feeling dangerous.",
@@ -357,8 +357,7 @@ LEAVE_GREETINGS = [
     "⚰️ Dead silence — {display_name} exits.",
     "📚 Story ends — {display_name}.",
     "🌒 Fade to black — {display_name} left.",
-
-    # -- extended flirty/mature leave lines --
+    # extended flirty leave lines
     "💋 {display_name} slipped away — and the room exhaled with regret.",
     "😈 Gone already? {display_name} leaves a better mess than most create.",
     "🖤 {display_name} left the stage — manners optional, memories guaranteed.",
@@ -425,7 +424,7 @@ LEAVE_GREETINGS = [
     "🪓 A clean cut goodbye — {display_name} left the scene.",
     "🌈 {display_name} left a streak of color and trouble.",
     "🏮 Lanterns dimmed as {display_name} disappeared down the lane.",
-    "🎤 Microphone dropped; {display_name} departed without a encore.",
+    "🎤 Microphone dropped; {display_name} departed without an encore.",
     "🥀 {display_name} left; the bouquet still smells like risk.",
     "🪞 Mirror emptied — {display_name} is nowhere to be found.",
     "🪩 The last dancer left: {display_name}. The floor misses them.",
@@ -453,7 +452,7 @@ LEAVE_GREETINGS = [
 ]
 
 # -------------------------
-# BOT SETUP
+# Bot Setup
 # -------------------------
 intents = discord.Intents.default()
 intents.guilds = True
@@ -464,7 +463,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # -------------------------
-# DATA LOADING / AUTOSAVE
+# Data load / autosave
 # -------------------------
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
@@ -473,7 +472,6 @@ if not os.path.exists(DATA_FILE):
 with open(DATA_FILE, "r") as f:
     data = json.load(f)
 
-# ensure the structure exists
 if "join_counts" not in data:
     data["join_counts"] = {}
 if "used_gifs" not in data:
@@ -488,18 +486,14 @@ async def autosave_task():
         logger.warning(f"Autosave failed: {e}")
 
 # -------------------------
-# RANDOMIZED TAG GENERATOR (mixes 1-3 tags)
+# Utilities: tag generator + data save
 # -------------------------
 def get_random_tag():
-    # choose 1 to 3 tags and join them — ensures variety and mixed queries
-    k = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
+    # pick 1-3 tags randomly (weights favor 1 or 2 so queries are focused)
+    k = random.choices([1,2,3], weights=[55,35,10])[0]
     chosen = random.sample(GIF_TAGS, k)
-    # join with spaces to form a natural search query
     return " ".join(chosen)
 
-# -------------------------
-# SAVE DATA UTIL
-# -------------------------
 def save_data():
     try:
         with open(DATA_FILE, "w") as f:
@@ -508,84 +502,100 @@ def save_data():
         logger.warning(f"Failed to save data: {e}")
 
 # -------------------------
-# FETCH GIF (FULLY RANDOMIZED) - AVOID SENDING SAME GIF TO SAME USER
+# Provider templates & simple public APIs
+# -------------------------
+BOORU_ENDPOINT_TEMPLATES = {
+    "danbooru": [
+        "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
+        "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=100"
+    ],
+    "konachan": [
+        "https://konachan.com/post.json?tags={tag_query}&limit=50",
+        "https://konachan.net/post.json?tags={tag_query}&limit=50"
+    ],
+    "yandere": [
+        "https://yande.re/post.json?tags={tag_query}&limit=50"
+    ],
+    "gelbooru": [
+        "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+    ],
+    "safebooru": [
+        "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+    ],
+    "xbooru": [
+        "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+    ],
+    "tbib": [
+        "https://tbib.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+    ],
+    "rule34": [
+        "https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1",
+        "https://rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1"
+    ]
+}
+
+SIMPLE_APIS = {
+    "waifu_pics": {
+        "base": "https://api.waifu.pics",
+        "categories_sfw": ["waifu","neko","shinobu","husbando","kiss","hug","slap","pat"],
+        "categories_nsfw": ["waifu","neko","trap","blowjob"]
+    },
+    "nekos_best": {
+        "base": "https://nekos.best/api/v2",
+        "categories": ["hug","kiss","pat","cuddle","dance","poke","slap","neko"]
+    },
+    "nekos_life": {
+        "base": "https://nekos.life/api/v2/img",
+        "categories": ["ngif","neko","kiss","hug","cuddle","pat","wink","slap"]
+    }
+}
+
+# -------------------------
+# Fetch GIF: randomized providers + booru with rating:questionable
 # -------------------------
 async def fetch_gif(user_id):
     """
-    Fully randomized fetch:
-      - random tag combo each try
-      - random provider chosen each try (no fixed preference)
-      - random endpoint/mirror chosen for boorus
-      - random ordering of results
-    Returns (gif_bytes, filename, gif_url) or (None, None, None).
+    Attempt to fetch a media file for the user that has not been sent before.
+    - random provider per attempt
+    - random tag(s) per attempt
+    - booru queries include rating:questionable and exclude illegal tags
+    Returns (bytes, filename, url) or (None, None, None)
     """
     user_key = str(user_id)
     used = data["used_gifs"].setdefault(user_key, [])
 
-    # Extra booru-safe exclusion tags (never request these)
-    EXCLUDE_TAGS = ["loli", "shota", "child", "minor", "underage", "young", "schoolgirl", "age_gap"]
+    # Tags we must never include
+    EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
     def build_booru_query(positive_tags):
-        tags = ["rating:questionable"]
+        # include rating:questionable and exclude illegal tags
+        tags = [f"rating:{BOORU_TARGET_RATING}"]
         tags.extend(positive_tags.split())
         tags.extend([f"-{t}" for t in EXCLUDE_TAGS])
         tag_str = " ".join(tags)
         return tag_str, quote_plus(tag_str)
 
-    # Provider endpoint templates (use same mapping from prior script)
-    BOORU_ENDPOINT_TEMPLATES = {
-        "danbooru": [
-            "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
-            "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=100"
-        ],
-        "konachan": [
-            "https://konachan.com/post.json?tags={tag_query}&limit=50",
-            "https://konachan.net/post.json?tags={tag_query}&limit=50"
-        ],
-        "yandere": [
-            "https://yande.re/post.json?tags={tag_query}&limit=50"
-        ],
-        "gelbooru": [
-            "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
-            "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
-        ],
-        "rule34": [
-            "https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1",
-            "https://rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1"
-        ],
-        "otakugifs": [
-            "https://otakugifs.xyz/api/gif?reaction={tag_query}"
-        ],
-        "xbooru": [
-            "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
-        ],
-        "tbib": [
-            "https://tbib.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
-        ],
-        "safebooru": [
-            "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
-        ]
-    }
-
-    # Build full provider list (include Tenor/Giphy if keys present)
+    # Build provider pool (include keys if provided)
     providers = []
     if TENOR_API_KEY:
         providers.append("tenor")
     if GIPHY_API_KEY:
         providers.append("giphy")
-    # include all booru provider keys
+    # add simple public APIs
+    providers.extend(["waifu_pics","nekos_best","nekos_life","otakugifs"])
+    # add booru family
     providers.extend(list(BOORU_ENDPOINT_TEMPLATES.keys()))
-
-    # We'll try several attempts; each attempt picks a random provider and random tag
-    attempts = 8
+    # shuffle providers so selection is randomized
+    random.shuffle(providers)
 
     async with aiohttp.ClientSession() as session:
-        for attempt_index in range(attempts):
-            # pick a random provider every attempt
+        for attempt in range(FETCH_ATTEMPTS):
             provider = random.choice(providers)
-            # pick a random tag combo each attempt
             positive = get_random_tag()
             tag_str, tag_query = build_booru_query(positive)
+
+            if DEBUG_FETCH:
+                logger.info(f"[fetch_gif] attempt {attempt+1}/{FETCH_ATTEMPTS} provider={provider} tag='{positive}'")
 
             # ---------- TENOR ----------
             if provider == "tenor" and TENOR_API_KEY:
@@ -598,21 +608,21 @@ async def fetch_gif(user_id):
                         payload = await resp.json()
                         results = payload.get("results", [])
                         random.shuffle(results)
-                        for result in results:
+                        for r in results:
                             gif_url = None
-                            media_formats = result.get("media_formats") or result.get("media")
+                            media_formats = r.get("media_formats") or r.get("media")
                             if isinstance(media_formats, dict):
-                                gif_entry = media_formats.get("gif") or media_formats.get("nanogif") or media_formats.get("mediumgif")
-                                if gif_entry and gif_entry.get("url"):
-                                    gif_url = gif_entry.get("url")
+                                for key in ("gif","nanogif","mediumgif","tinygif"):
+                                    if media_formats.get(key) and media_formats[key].get("url"):
+                                        gif_url = media_formats[key]["url"]; break
                             elif isinstance(media_formats, list) and media_formats:
                                 first = media_formats[0]
                                 if isinstance(first, dict):
-                                    gif_entry = first.get("gif") or first.get("tinygif")
-                                    if gif_entry and gif_entry.get("url"):
-                                        gif_url = gif_entry.get("url")
-                            if not gif_url and result.get("itemurl"):
-                                gif_url = result.get("itemurl")
+                                    for key in ("gif","tinygif","mediumgif"):
+                                        if first.get(key) and first[key].get("url"):
+                                            gif_url = first[key]["url"]; break
+                            if not gif_url:
+                                gif_url = r.get("itemurl")
                             if not gif_url:
                                 continue
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
@@ -620,20 +630,23 @@ async def fetch_gif(user_id):
                                 continue
                             try:
                                 async with session.get(gif_url, timeout=18) as gr:
-                                    if gr.status == 200:
-                                        b = await gr.read()
-                                        ext = ".gif"
-                                        ctype = gr.content_type or ""
-                                        if ".webm" in gif_url or "webm" in ctype:
-                                            ext = ".webm"
-                                        elif ".mp4" in gif_url or "mp4" in ctype:
-                                            ext = ".mp4"
-                                        name = f"tenor_{gif_hash[:6]}{ext}"
-                                        used.append(gif_hash)
-                                        if len(used) > MAX_USED_GIFS_PER_USER:
-                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                        save_data()
-                                        return b, name, gif_url
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = ".gif"
+                                    if ".webm" in gif_url or "webm" in ctype:
+                                        ext = ".webm"
+                                    elif ".mp4" in gif_url or "mp4" in ctype:
+                                        ext = ".mp4"
+                                    name = f"tenor_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
                             except Exception:
                                 continue
                 except Exception:
@@ -652,9 +665,7 @@ async def fetch_gif(user_id):
                         random.shuffle(arr)
                         for item in arr:
                             images = item.get("images", {})
-                            gif_url = None
-                            if images and images.get("original") and images["original"].get("url"):
-                                gif_url = images["original"].get("url")
+                            gif_url = images.get("original", {}).get("url") or images.get("downsized", {}).get("url")
                             if not gif_url:
                                 continue
                             gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
@@ -662,31 +673,175 @@ async def fetch_gif(user_id):
                                 continue
                             try:
                                 async with session.get(gif_url, timeout=18) as gr:
-                                    if gr.status == 200:
-                                        b = await gr.read()
-                                        ext = ".gif"
-                                        ctype = gr.content_type or ""
-                                        if ".mp4" in gif_url or "mp4" in ctype:
-                                            ext = ".mp4"
-                                        elif "webm" in ctype or ".webm" in gif_url:
-                                            ext = ".webm"
-                                        name = f"giphy_{gif_hash[:6]}{ext}"
-                                        used.append(gif_hash)
-                                        if len(used) > MAX_USED_GIFS_PER_USER:
-                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                        save_data()
-                                        return b, name, gif_url
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = ".gif"
+                                    if ".mp4" in gif_url or "mp4" in ctype:
+                                        ext = ".mp4"
+                                    elif "webm" in ctype or ".webm" in gif_url:
+                                        ext = ".webm"
+                                    name = f"giphy_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
                             except Exception:
                                 continue
                 except Exception:
                     continue
 
-            # ---------- BOORUS & MIRRORS ----------
+            # ---------- SIMPLE PUBLIC APIS ----------
+            if provider in ("waifu_pics","nekos_best","nekos_life"):
+                try:
+                    if provider == "waifu_pics":
+                        # use NSFW endpoints since user wants questionable, but we avoid explicit by tag/rating where possible
+                        # We'll try nsfw endpoints that are known to be lewd but not hardcore; adjust if you want more or less risky
+                        category = random.choice(SIMPLE_APIS["waifu_pics"]["categories_nsfw"])
+                        url = f"{SIMPLE_APIS['waifu_pics']['base']}/nsfw/{category}"
+                        async with session.get(url, timeout=10) as resp:
+                            if resp.status != 200:
+                                continue
+                            payload = await resp.json()
+                            gif_url = payload.get("url") or payload.get("image") or payload.get("file")
+                            if not gif_url:
+                                continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=15) as gr:
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = os.path.splitext(gif_url)[1] or ".gif"
+                                    name = f"waifu_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
+                            except Exception:
+                                continue
+
+                    elif provider == "nekos_best":
+                        category = random.choice(SIMPLE_APIS["nekos_best"]["categories"])
+                        url = f"{SIMPLE_APIS['nekos_best']['base']}/{category}"
+                        async with session.get(url + "?amount=1", timeout=10) as resp:
+                            if resp.status != 200:
+                                continue
+                            payload = await resp.json()
+                            results = payload.get("results") or []
+                            if not results:
+                                continue
+                            random.shuffle(results)
+                            for r in results:
+                                gif_url = r.get("url") or r.get("file")
+                                if not gif_url:
+                                    continue
+                                gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                                if gif_hash in used:
+                                    continue
+                                try:
+                                    async with session.get(gif_url, timeout=15) as gr:
+                                        if gr.status != 200:
+                                            continue
+                                        ctype = gr.content_type or ""
+                                        if "html" in ctype:
+                                            continue
+                                        b = await gr.read()
+                                        ext = os.path.splitext(gif_url)[1] or ".gif"
+                                        name = f"nekosbest_{gif_hash[:8]}{ext}"
+                                        used.append(gif_hash)
+                                        if len(used) > MAX_USED_GIFS_PER_USER:
+                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                        save_data()
+                                        return b, name, gif_url
+                                except Exception:
+                                    continue
+
+                    elif provider == "nekos_life":
+                        category = random.choice(SIMPLE_APIS["nekos_life"]["categories"])
+                        url = f"{SIMPLE_APIS['nekos_life']['base']}/{category}"
+                        async with session.get(url, timeout=10) as resp:
+                            if resp.status != 200:
+                                continue
+                            payload = await resp.json()
+                            gif_url = payload.get("url") or payload.get("image") or payload.get("result")
+                            if not gif_url:
+                                continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=15) as gr:
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = os.path.splitext(gif_url)[1] or ".gif"
+                                    name = f"nekoslife_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
+
+            # ---------- OtakuGIFs (simple) ----------
+            if provider == "otakugifs":
+                try:
+                    reaction = quote_plus(positive)
+                    url = f"https://otakugifs.xyz/api/gif?reaction={reaction}"
+                    async with session.get(url, timeout=10) as resp:
+                        if resp.status != 200:
+                            continue
+                        payload = await resp.json()
+                        gif_url = payload.get("url") or payload.get("gif") or payload.get("file") or payload.get("result")
+                        if not gif_url and isinstance(payload, str):
+                            gif_url = payload
+                        if not gif_url:
+                            continue
+                        gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                        if gif_hash in used:
+                            continue
+                        try:
+                            async with session.get(gif_url, timeout=15) as gr:
+                                if gr.status != 200:
+                                    continue
+                                ctype = gr.content_type or ""
+                                if "html" in ctype:
+                                    continue
+                                b = await gr.read()
+                                ext = os.path.splitext(gif_url)[1] or ".gif"
+                                name = f"otakugifs_{gif_hash[:8]}{ext}"
+                                used.append(gif_hash)
+                                if len(used) > MAX_USED_GIFS_PER_USER:
+                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                save_data()
+                                return b, name, gif_url
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+
+            # ---------- BOORUS (rating:questionable) ----------
             if provider in BOORU_ENDPOINT_TEMPLATES:
                 templates = BOORU_ENDPOINT_TEMPLATES.get(provider, [])
                 if not templates:
                     continue
-                # pick a random template/mirror for this provider this attempt
                 template = random.choice(templates)
                 url = template.format(tag_query=tag_query)
                 try:
@@ -696,18 +851,19 @@ async def fetch_gif(user_id):
                         try:
                             posts = await resp.json()
                         except Exception:
+                            # skip non-json responses
                             continue
-                        # normalize posts to list
+                        # normalize posts to a list
                         if isinstance(posts, dict):
                             if "posts" in posts:
                                 posts = posts["posts"]
                             elif "post" in posts:
                                 posts = posts["post"]
                             else:
-                                if isinstance(posts.get("id"), (int, str)):
+                                if isinstance(posts.get("id"), (int,str)):
                                     posts = [posts]
                                 else:
-                                    posts = []
+                                    posts = list(posts.values()) if posts else []
                         if not isinstance(posts, list):
                             try:
                                 posts = list(posts)
@@ -718,23 +874,24 @@ async def fetch_gif(user_id):
                         random.shuffle(posts)
                         for post in posts:
                             gif_url = None
-                            for fkey in ("file_url", "large_file_url", "image_url", "jpeg_url", "source", "file", "image", "url", "preview_url"):
+                            for key in ("file_url","large_file_url","image_url","jpeg_url","source","file","image","url","preview_url"):
                                 try:
-                                    v = post.get(fkey)
+                                    v = post.get(key)
                                 except Exception:
                                     v = None
                                 if v:
                                     gif_url = v
                                     break
-                            if not gif_url:
-                                # nested patterns
-                                if isinstance(post.get("files"), dict):
-                                    gif_url = post["files"].get("original") or post["files"].get("file")
+                            if not gif_url and isinstance(post.get("files"), dict):
+                                gif_url = post["files"].get("original") or post["files"].get("file")
                             if not gif_url:
                                 continue
-                            rating = post.get("rating") or ""
-                            if isinstance(rating, str) and rating.lower().startswith("e"):
+                            # defensive: skip explicit if rating marker present
+                            rating = (post.get("rating") or "").lower()
+                            if rating.startswith("e"):
+                                # skip explicit
                                 continue
+                            # skip if illegal tags present in tag strings
                             tags_field = ""
                             if isinstance(post.get("tag_string"), str):
                                 tags_field = post.get("tag_string")
@@ -747,34 +904,29 @@ async def fetch_gif(user_id):
                                 continue
                             try:
                                 async with session.get(gif_url, timeout=18) as gr:
-                                    if gr.status == 200:
-                                        b = await gr.read()
-                                        ctype = gr.content_type or ""
-                                        ext = ".gif"
-                                        if ".webm" in gif_url or "webm" in ctype:
-                                            ext = ".webm"
-                                        elif ".mp4" in gif_url or "mp4" in ctype:
-                                            ext = ".mp4"
-                                        elif ".png" in gif_url or "png" in ctype:
-                                            ext = ".png"
-                                        elif ".jpg" in gif_url or "jpeg" in gif_url or "jpeg" in ctype:
-                                            ext = ".jpg"
-                                        name = f"{provider.lower()}_{gif_hash[:6]}{ext}"
-                                        used.append(gif_hash)
-                                        if len(used) > MAX_USED_GIFS_PER_USER:
-                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                        save_data()
-                                        return b, name, gif_url
+                                    if gr.status != 200:
+                                        continue
+                                    ctype = gr.content_type or ""
+                                    if "html" in ctype:
+                                        continue
+                                    b = await gr.read()
+                                    ext = os.path.splitext(gif_url)[1] or ".gif"
+                                    name = f"{provider}_{gif_hash[:8]}{ext}"
+                                    used.append(gif_hash)
+                                    if len(used) > MAX_USED_GIFS_PER_USER:
+                                        del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                    save_data()
+                                    return b, name, gif_url
                             except Exception:
                                 continue
                 except Exception:
                     continue
 
-        # no provider produced a fresh gif this call
+        # if here, no provider returned a fresh file for this user this call
     return None, None, None
 
 # -------------------------
-# EMBED BUILDER
+# Embed builder
 # -------------------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.pink() if kind == "join" else discord.Color.dark_grey()
@@ -803,7 +955,7 @@ async def on_ready():
     logger.info(f"✅ Logged in as {bot.user}")
 
 # -------------------------
-# VOICE STATE UPDATE (MULTI VC)
+# VOICE STATE UPDATE (Multi-VC)
 # -------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -856,7 +1008,7 @@ async def on_voice_state_update(member, before, after):
                     try:
                         embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
                         if gif_url:
-                            embed_dm.description += f"\n[View GIF here]({gif_url})"
+                            embed_dm.description += f"\n[View media here]({gif_url})"
                         await member.send(embed=embed_dm)
                     except Exception:
                         logger.warning(f"Failed to DM {member.display_name}")
@@ -869,6 +1021,7 @@ async def on_voice_state_update(member, before, after):
                 except Exception:
                     logger.warning(f"Failed to DM {member.display_name}")
         else:
+            # If nothing found, still send embed (we tried many providers)
             if text_channel:
                 await text_channel.send(embed=embed)
             try:
@@ -898,7 +1051,7 @@ async def on_voice_state_update(member, before, after):
                     try:
                         embed_dm = make_embed("Goodbye!", msg, member, "leave")
                         if gif_url:
-                            embed_dm.description += f"\n[View GIF here]({gif_url})"
+                            embed_dm.description += f"\n[View media here]({gif_url})"
                         await member.send(embed=embed_dm)
                     except Exception:
                         logger.warning(f"Failed to DM {member.display_name}")
