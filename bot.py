@@ -40,21 +40,29 @@ MAX_USED_GIFS_PER_USER = 500  # keep history bounded to avoid unbounded data gro
 # GIF TAGS (combined: your requested + optimized)
 # -------------------------
 GIF_TAGS = [
-    "anime sexy","anime waifu","hentai","anime ecchi","anime boobs",
-    "anime ass","anime milf","anime girl","anime girl ecchi",
-    "genshin impact waifu","game waifu","anime hot girl","anime seductive",
-    "anime suggestive","ecchi anime girl","anime fanservice","anime ero",
-    "waifu ecchi","anime blush ecchi","ecchi fighting anime","anime swimsuit ecchi",
-    "anime thick","anime oppai","anime jiggle","anime thighs",
-    "anime thick thighs","anime booty","anime booty shorts","anime lingerie girl",
-    "anime bikini girl","anime teasing anime girl","anime mature woman","anime older waifu",
-    "anime charm girl","anime flirty","anime sensual","anime blushing girl",
-    # romantic / kiss / hug
-    "anime kiss","anime couple kiss","anime romantic","romantic anime",
-    "anime hug","cute anime hug","anime love","anime couple hug",
-    # user requested explicit-ish tags (you asked)
-    "sexy anime girl","horny anime","horny waifu","sexy milf anime",
-    "anime milf horny","romantic hentai","ecchi kiss","ecchi hug"
+    # Core ecchi / waifu
+    "anime ass", "anime bikini girl", "anime boobs", "anime booty",
+    "anime booty shorts", "anime ecchi", "anime fanservice",
+    "anime girl", "anime girl ecchi", "anime hot girl", "anime jiggle",
+    "anime lingerie girl", "anime milf", "anime milf horny",
+    "anime older waifu", "anime oppai", "anime seductive",
+    "anime sensual", "anime sexy", "anime suggestive",
+    "anime thick", "anime thick thighs", "anime thighs",
+    "anime teasing anime girl",
+    "ecchi anime girl", "ecchi fighting anime",
+    "anime swimsuit ecchi", "anime blushing girl",
+
+    # Waifu / Game
+    "waifu ecchi", "genshin impact waifu", "game waifu",
+
+    # Romantic / Hug / Kiss
+    "anime kiss", "anime couple kiss", "anime romantic",
+    "romantic anime", "anime hug", "cute anime hug",
+    "anime love", "anime couple hug",
+
+    # Explicit-ish (requested by you)
+    "sexy anime girl", "horny anime", "horny waifu",
+    "sexy milf anime", "romantic hentai", "ecchi kiss", "ecchi hug"
 ]
 
 # keep as you asked
@@ -68,7 +76,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anime-bot")
 
 # -------------------------
-# JOIN & LEAVE GREETINGS (full lists)
+# JOIN & LEAVE GREETINGS (original + extended)
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} steps into the scene — the anime just got interesting.",
@@ -163,6 +171,104 @@ JOIN_GREETINGS = [
     "🎶 A melody begins — welcome, {display_name}.",
     "🌈 Your aura colors the VC, {display_name}.",
     "🌀 Dramatic cut-in — {display_name} joins!",
+
+    # -- extended flirty/mature additions --
+    "🔥 {display_name} walked in and the thermostat just begged for mercy.",
+    "😉 Well, hello trouble — {display_name} decided to show up.",
+    "😏 Someone call the spotlight — {display_name} just entered the scene.",
+    "💋 Oh? {display_name} is here. Someone's feeling dangerous.",
+    "😈 Alert: {display_name} entered. Expect mischief and charm.",
+    "🍸 {display_name} arrived — drinks, drama, and delightful chaos.",
+    "🌶️ Spice level rising… {display_name} just joined.",
+    "🖤 {display_name} strolled in like they owe the world an apology.",
+    "💫 The plot thickens now that {display_name} has appeared.",
+    "🎲 Risky move: {display_name} showed up and we're all losing our cool.",
+    "🕶️ Bold entrance by {display_name}. Attitude: 100.",
+    "🎯 Target acquired — {display_name} is on the scene.",
+    "🌙 Midnight mischief incoming because {display_name} is here.",
+    "✨ If charisma were a crime, {display_name} would be serving life.",
+    "🍷 Classy and a little dangerous — {display_name} has arrived.",
+    "🖤 {display_name} just lowered the tone of the room in the best way.",
+    "🎭 Drama upgrade: starring {display_name} in tonight's chaos.",
+    "🔥 Someone turn on the fan — {display_name} brought the heat.",
+    "💼 {display_name} walked in and instantly made everything complicated.",
+    "🎧 Soundtrack change — {display_name} just dropped the bass.",
+    "🪄 Magic? No — just {display_name} doing their thing.",
+    "🍒 Sweet with a hint of trouble — hello {display_name}.",
+    "⚡ Quick warning: {display_name} energizes bad ideas.",
+    "🦊 Sly and irresistible — {display_name} joins the party.",
+    "🌹 Roses are cliché, but {display_name} is not — welcome.",
+    "📸 Pose for the chaos — {display_name} has arrived.",
+    "🚀 {display_name} entered and launched everyone's expectations.",
+    "💥 Subtlety left the building when {display_name} walked in.",
+    "🪩 Glitter and wrong decisions — thanks for coming, {display_name}.",
+    "🩶 Dark charm alert: {display_name} stepped in.",
+    "💃 Someone set the music — {display_name} is ready to stir things up.",
+    "🔮 I can't predict the future, but {display_name} usually means late-night plans.",
+    "🍯 Sweet talker spotted — {display_name} has joined.",
+    "🪤 You walked into temptation — hi {display_name}.",
+    "🎟️ VIP access granted — {display_name} showed up fashionably late.",
+    "🗝️ Keys to chaos delivered by {display_name}.",
+    "🦋 Flirtation levels rising — {display_name} is in the room.",
+    "💡 Bright idea: follow {display_name} at your own risk.",
+    "📚 There goes the plot twist — {display_name} arrived.",
+    "🌊 Tides turned — {display_name} just made waves.",
+    "🧊 Cold look, hot entrance — {display_name} is here.",
+    "🕯️ Candlelit mischief begins now that {display_name} joined.",
+    "🎰 All bets on {display_name} — and the odds are deliciously skewed.",
+    "🍓 {display_name} rolled in and suddenly dessert is mandatory.",
+    "📯 Sound the horn — {display_name} is in the building.",
+    "🧭 Lost? No — just following {display_name}'s magnetic pull.",
+    "🌪️ Chaos tasteful enough to be art — thanks {display_name}.",
+    "🛋️ Softer than a threat: welcome {display_name}.",
+    "🧨 Short fuse, big effect — {display_name} is here.",
+    "🎈 Innocent smile, guilty intentions — hi {display_name}.",
+    "💼 Corporate mischief courtesy of {display_name}.",
+    "🪞Mirror check: yep, {display_name} still looks like trouble.",
+    "🍬 Sweet façade, sticky consequences — welcome, {display_name}.",
+    "🏮 Lanterns flicker — {display_name} lights up the night.",
+    "🎤 Mic dropped — {display_name} doesn't need to say a thing.",
+    "🪩 Your entrance made the playlist skip — thank you {display_name}.",
+    "🦄 Rare and slightly scandalous — {display_name} appears.",
+    "🕶️ Cool glare detected. {display_name} just arrived.",
+    "🍾 Pop the cork — {display_name} deserves the celebration.",
+    "🛡️ Charming enough to disarm — {display_name} walks in.",
+    "💃 The room got rhythm when {display_name} took a step.",
+    "🧩 Missing piece found: {display_name} completes the puzzle.",
+    "🌈 Colorful trouble has arrived — hey {display_name}.",
+    "🪙 Heads up: {display_name} flips expectations and pockets secrets.",
+    "🖋️ Signature entrance — {display_name} signs in with flair.",
+    "🎯 You came, you saw, you slayed — welcome {display_name}.",
+    "🍷 Velvet tone and sharp edges — that's {display_name}.",
+    "🔞 Mature vibes only — {display_name} enters the room.",
+    "🕯️ Soft light, sharper intentions — hello {display_name}.",
+    "🏷️ Tagged: irresistible. {display_name} checks in.",
+    "🎩 Classy with attitude — {display_name} tips the hat.",
+    "🫦 Lips sealed, eyes loud — {display_name} is here.",
+    "📅 Tonight's agenda: {display_name} causes a scene.",
+    "🛋️ Stay seated — {display_name} prefers to steal the show.",
+    "🧨 Quiet before the fun — {display_name} just arrived.",
+    "🔗 Chains optional, charm mandatory — welcome {display_name}.",
+    "🌀 Dizzying presence detected — {display_name} joins.",
+    "💼 Work hard, tease harder — {display_name} is in the VC.",
+    "🌒 Shadows lengthen when {display_name} shows up.",
+    "🥀 Pretty and a little poisonous — hi {display_name}.",
+    "📯 Announce the mischief — {display_name} has entered.",
+    "🔥 Slow burn starter: {display_name} has arrived.",
+    "🦩 Graceful and dangerous — welcome, {display_name}.",
+    "💬 Conversation killer: {display_name} just logged on.",
+    "🎀 Cute on purpose, trouble by accident — thanks for coming {display_name}.",
+    "🪬 Lucky strike — {display_name} brings the kind of luck you whisper about.",
+    "🌶️ Too hot to handle, too fun to deny — {display_name} joined.",
+    "🧸 Soft voice, sharp looks — say hello to {display_name}.",
+    "🎲 Double or nothing — {display_name} is ready to play.",
+    "🗝️ Unlocking curiosity: {display_name} has arrived.",
+    "🥂 Raise a glass — {display_name} showed up and the night's improved.",
+    "🕹️ Someone hit the turbo — {display_name} entered the lobby.",
+    "🪓 Cute smile, dangerous plans — welcome {display_name}.",
+    "📸 Snap. Scene. {display_name} just made the highlight reel.",
+    "🔮 Fate called and said: meet {display_name}.",
+    "🪩 Enter with rhythm — {display_name} is here to shake things up."
 ]
 
 LEAVE_GREETINGS = [
@@ -250,7 +356,100 @@ LEAVE_GREETINGS = [
     "🚪 Door closes — {display_name} left.",
     "⚰️ Dead silence — {display_name} exits.",
     "📚 Story ends — {display_name}.",
-    "🌒 Fade to black — {display_name} left."
+    "🌒 Fade to black — {display_name} left.",
+
+    # -- extended flirty/mature leave lines --
+    "💋 {display_name} slipped away — and the room exhaled with regret.",
+    "😈 Gone already? {display_name} leaves a better mess than most create.",
+    "🖤 {display_name} left the stage — manners optional, memories guaranteed.",
+    "🍃 {display_name} faded like smoke; seductive and impossible to hold.",
+    "🔐 Door closed. {display_name} stole the moment and the key.",
+    "🎭 Curtain call for {display_name} — encore not included.",
+    "🥀 {display_name} left; perfection and trouble went with them.",
+    "🍷 {display_name} departed — someone pour a little regret.",
+    "🕯️ The lights dim when {display_name} steps away.",
+    "⚡ {display_name} left a spark and a small disaster.",
+    "🍬 Sweet exit, bitter aftertaste — bye {display_name}.",
+    "🪩 The party lost its playlist when {display_name} left.",
+    "🕶️ {display_name} ghosted with style — classy and cold.",
+    "🔮 {display_name} vanished like a prediction you loved anyway.",
+    "💼 {display_name} logged off and took the drama with them.",
+    "🌙 Night swooped in after {display_name} left the room.",
+    "🎯 {display_name} left — aim: flawless. Impact: unforgettable.",
+    "🦊 Sly departure from {display_name}; the mystery deepens.",
+    "🍓 {display_name} drifted away leaving sticky memories.",
+    "🛋️ {display_name} retired to the shadows — the couch remembers.",
+    "🧨 Exit with a bang — {display_name} didn't leave quietly.",
+    "🦋 {display_name} flew off; everyone still smells the chaos.",
+    "🎲 {display_name} left the table and the stakes rose higher.",
+    "🍾 {display_name} popped out — classy exit, dramatic effect.",
+    "🗝️ {display_name} closed the door on trouble and goodbyes.",
+    "🩶 The room lost its edge when {display_name} left.",
+    "📯 Announce: {display_name} has departed — rumors welcomed.",
+    "🌹 {display_name}'s exit felt like a rose dropped in slow motion.",
+    "🧭 {display_name} walked away and left a trail we all want to follow.",
+    "🪞 Reflection left the mirror — {display_name} is gone.",
+    "🪤 The trapdoor opened; {display_name} vanished with a wink.",
+    "🔞 Mature exit: {display_name} left the scene while raising eyebrows.",
+    "🕯️ {display_name} departed — the candle still flickers from their touch.",
+    "🥂 Cheers to {display_name} — left us smiling and slightly guilty.",
+    "📸 {display_name} left the frame; the photo's still hot.",
+    "🧩 {display_name} removed themselves and somehow completed the puzzle.",
+    "🌪️ A quiet storm left with {display_name}.",
+    "🎩 {display_name} tipped their hat and walked away like a plot twist.",
+    "🍷 The bottle's emptier now that {display_name} is gone.",
+    "🦉 Night feels smarter when {display_name} takes off.",
+    "🌊 {display_name} drifted out; the tide kept the memory.",
+    "🪬 Luck shifted when {display_name} left the room.",
+    "🛡️ Protector gone — {display_name} exits with dangerous grace.",
+    "🔗 {display_name} unlinked themselves and left us all a little looser.",
+    "📚 The chapter ended when {display_name} left; we read it twice.",
+    "🧠 Clever exit — {display_name} left us thinking about bad decisions.",
+    "🎭 Stage empty; {display_name} took the spotlight with them.",
+    "🍒 Leaving like a sin dressed as dessert — bye {display_name}.",
+    "🪁 {display_name} drifted away, playful and untouchable.",
+    "🗡️ Sharp goodbye — {display_name} left with teeth and style.",
+    "🎶 The last note faded when {display_name} stepped away.",
+    "🪙 {display_name} vanished with a trick up their sleeve.",
+    "🦄 {display_name} left; the rare air still hums.",
+    "🕊️ {display_name} flew off and left a few hearts unsettled.",
+    "✨ Exit stage left: {display_name} made it dramatic as always.",
+    "🍂 {display_name} fell away like a leaf—beautiful and brief.",
+    "🧸 {display_name} walked out smiling; the room feels oddly betrayed.",
+    "💥 {display_name} left like fireworks — loud and unforgettable.",
+    "🍭 {display_name} left a sweet mess on the floor.",
+    "🕯️ Flicker gone: {display_name} departed and the glow lingered.",
+    "🔔 {display_name} rang out and then vanished into the night.",
+    "🦩 Stylish exit by {display_name} — elegant with a sting.",
+    "📀 The record scratched when {display_name} took their leave.",
+    "🪓 A clean cut goodbye — {display_name} left the scene.",
+    "🌈 {display_name} left a streak of color and trouble.",
+    "🏮 Lanterns dimmed as {display_name} disappeared down the lane.",
+    "🎤 Microphone dropped; {display_name} departed without a encore.",
+    "🥀 {display_name} left; the bouquet still smells like risk.",
+    "🪞 Mirror emptied — {display_name} is nowhere to be found.",
+    "🪩 The last dancer left: {display_name}. The floor misses them.",
+    "🕶️ {display_name} slipped away wearing an attitude and sunglasses.",
+    "🧭 Direction lost when {display_name} turned away and walked off.",
+    "🎯 Closing target: {display_name} left, aim impeccable.",
+    "📅 Calendar note: {display_name} left and the night shifted tone.",
+    "🧪 {display_name} conducted an experiment and then quietly exited.",
+    "🔮 {display_name} left like a prophecy fulfilled—mysterious and satisfying.",
+    "🪬 The charm left with {display_name}; good luck tries to follow.",
+    "🔞 {display_name} left—no kids allowed in the memory lane.",
+    "🍷 {display_name} left and the glass still tastes like their name.",
+    "🪣 Clean exit: {display_name} wiped the slate and left an impression.",
+    "🎲 {display_name} rolled away and the dice keep whispering.",
+    "🗝️ {display_name} took the secret and left us grinning.",
+    "📸 Photo fades when {display_name} leaves, but the smile remains.",
+    "🧨 {display_name} walked off—residue of excitement remains.",
+    "🥂 {display_name} toasted the room with their exit.",
+    "🦊 Cunning goodbye—{display_name} left and the foxes cheered.",
+    "🔗 Links broken; {display_name} left the chain of events unfinished.",
+    "🛞 Wheels stop — {display_name} is gone but the ride lingers.",
+    "🕯️ The flame dipped as {display_name} stepped into the dark.",
+    "🧩 {display_name} left and the pieces still fit a little wrong after.",
+    "🎀 {display_name} untied the bow and disappeared into trouble."
 ]
 
 # -------------------------
@@ -309,14 +508,15 @@ def save_data():
         logger.warning(f"Failed to save data: {e}")
 
 # -------------------------
-# FETCH GIF (TENOR FIRST, FALLBACK GIPHY + NO-KEY BOORUS) - AVOID SENDING SAME GIF TO SAME USER
+# FETCH GIF (FULLY RANDOMIZED) - AVOID SENDING SAME GIF TO SAME USER
 # -------------------------
 async def fetch_gif(user_id):
     """
-    Attempts to fetch a GIF not previously sent to `user_id`.
-    Search order is randomized per call across providers:
-      Tenor, Giphy, Danbooru, Konachan, Yande.re, Gelbooru, Rule34, OtakuGIFs
-    All booru queries use rating:questionable and explicitly exclude illegal tags.
+    Fully randomized fetch:
+      - random tag combo each try
+      - random provider chosen each try (no fixed preference)
+      - random endpoint/mirror chosen for boorus
+      - random ordering of results
     Returns (gif_bytes, filename, gif_url) or (None, None, None).
     """
     user_key = str(user_id)
@@ -325,221 +525,252 @@ async def fetch_gif(user_id):
     # Extra booru-safe exclusion tags (never request these)
     EXCLUDE_TAGS = ["loli", "shota", "child", "minor", "underage", "young", "schoolgirl", "age_gap"]
 
-    # helper to build booru tag string and url-encode it
     def build_booru_query(positive_tags):
         tags = ["rating:questionable"]
-        # positive_tags is space-separated words; append them
         tags.extend(positive_tags.split())
-        # add requires-exclude tags prefixed with '-'
         tags.extend([f"-{t}" for t in EXCLUDE_TAGS])
         tag_str = " ".join(tags)
         return tag_str, quote_plus(tag_str)
 
-    # providers list (include Tenor/Giphy only if keys present)
+    # Provider endpoint templates (use same mapping from prior script)
+    BOORU_ENDPOINT_TEMPLATES = {
+        "danbooru": [
+            "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
+            "https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=100"
+        ],
+        "konachan": [
+            "https://konachan.com/post.json?tags={tag_query}&limit=50",
+            "https://konachan.net/post.json?tags={tag_query}&limit=50"
+        ],
+        "yandere": [
+            "https://yande.re/post.json?tags={tag_query}&limit=50"
+        ],
+        "gelbooru": [
+            "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
+            "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+        ],
+        "rule34": [
+            "https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1",
+            "https://rule34.xxx/index.php?page=dapi&s=post&q=index&limit=50&tags={tag_query}&json=1"
+        ],
+        "otakugifs": [
+            "https://otakugifs.xyz/api/gif?reaction={tag_query}"
+        ],
+        "xbooru": [
+            "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+        ],
+        "tbib": [
+            "https://tbib.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+        ],
+        "safebooru": [
+            "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50"
+        ]
+    }
+
+    # Build full provider list (include Tenor/Giphy if keys present)
     providers = []
     if TENOR_API_KEY:
         providers.append("tenor")
     if GIPHY_API_KEY:
         providers.append("giphy")
-    # always include no-key boorus
-    providers.extend(["danbooru", "konachan", "yandere", "gelbooru", "rule34", "otakugifs"])
-    # shuffle provider order to ensure randomness per call
-    random.shuffle(providers)
+    # include all booru provider keys
+    providers.extend(list(BOORU_ENDPOINT_TEMPLATES.keys()))
+
+    # We'll try several attempts; each attempt picks a random provider and random tag
+    attempts = 8
 
     async with aiohttp.ClientSession() as session:
-        # We'll attempt each provider in the shuffled order; for each provider, use 1-2 randomized queries
-        for provider in providers:
-            # pick 1-2 different tags to try for this provider to avoid repeats
-            tries_for_provider = 2
-            for t_try in range(tries_for_provider):
-                positive = get_random_tag()
-                tag_str, tag_query = build_booru_query(positive)
+        for attempt_index in range(attempts):
+            # pick a random provider every attempt
+            provider = random.choice(providers)
+            # pick a random tag combo each attempt
+            positive = get_random_tag()
+            tag_str, tag_query = build_booru_query(positive)
 
-                # ---------- TENOR (API key) -----------
-                if provider == "tenor" and TENOR_API_KEY:
-                    try:
-                        tenor_q = quote_plus(positive)
-                        tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=20&contentfilter=off"
-                        async with session.get(tenor_url, timeout=10) as resp:
-                            if resp.status == 200:
-                                payload = await resp.json()
-                                results = payload.get("results", [])
-                                random.shuffle(results)
-                                for result in results:
-                                    gif_url = None
-                                    media_formats = result.get("media_formats") or result.get("media")
-                                    if isinstance(media_formats, dict):
-                                        gif_entry = media_formats.get("gif")
-                                        if gif_entry and gif_entry.get("url"):
-                                            gif_url = gif_entry.get("url")
-                                        # fallback to other gif-like fields
-                                        for key in ("nanogif", "mediumgif", "tinygif"):
-                                            if not gif_url and media_formats.get(key) and media_formats[key].get("url"):
-                                                gif_url = media_formats[key].get("url")
-                                    elif isinstance(media_formats, list) and len(media_formats) > 0:
-                                        first = media_formats[0]
-                                        if isinstance(first, dict):
-                                            gif_entry = first.get("gif") or first.get("tinygif")
-                                            if gif_entry and gif_entry.get("url"):
-                                                gif_url = gif_entry.get("url")
-                                    if not gif_url and result.get("itemurl"):
-                                        gif_url = result.get("itemurl")
-
-                                    if not gif_url:
-                                        continue
-
-                                    gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                                    if gif_hash in used:
-                                        continue
-
-                                    # attempt download
-                                    try:
-                                        async with session.get(gif_url, timeout=15) as gr:
-                                            if gr.status == 200:
-                                                b = await gr.read()
-                                                ext = ".gif"
-                                                ctype = gr.content_type or ""
-                                                if ".webm" in gif_url or "webm" in ctype:
-                                                    ext = ".webm"
-                                                elif ".mp4" in gif_url or "mp4" in ctype:
-                                                    ext = ".mp4"
-                                                name = f"tenor_{gif_hash[:6]}{ext}"
-                                                used.append(gif_hash)
-                                                if len(used) > MAX_USED_GIFS_PER_USER:
-                                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                                save_data()
-                                                return b, name, gif_url
-                                    except Exception as e:
-                                        logger.debug(f"Tenor download error: {e}")
-                    except Exception as e:
-                        logger.debug(f"Tenor search error: {e}")
-
-                # ---------- GIPHY (API key) -----------
-                if provider == "giphy" and GIPHY_API_KEY:
-                    try:
-                        giphy_q = quote_plus(positive)
-                        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=20&rating={GIPHY_RATING}"
-                        async with session.get(giphy_url, timeout=10) as resp:
-                            if resp.status == 200:
-                                payload = await resp.json()
-                                arr = payload.get("data", [])
-                                random.shuffle(arr)
-                                for item in arr:
-                                    images = item.get("images", {})
-                                    gif_url = None
-                                    if images and images.get("original") and images["original"].get("url"):
-                                        gif_url = images["original"].get("url")
-                                    if not gif_url:
-                                        continue
-                                    gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                                    if gif_hash in used:
-                                        continue
-                                    try:
-                                        async with session.get(gif_url, timeout=15) as gr:
-                                            if gr.status == 200:
-                                                b = await gr.read()
-                                                ext = ".gif"
-                                                ctype = gr.content_type or ""
-                                                if ".mp4" in gif_url or "mp4" in ctype:
-                                                    ext = ".mp4"
-                                                elif "webm" in ctype or ".webm" in gif_url:
-                                                    ext = ".webm"
-                                                name = f"giphy_{gif_hash[:6]}{ext}"
-                                                used.append(gif_hash)
-                                                if len(used) > MAX_USED_GIFS_PER_USER:
-                                                    del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                                save_data()
-                                                return b, name, gif_url
-                                    except Exception as e:
-                                        logger.debug(f"Giphy download error: {e}")
-                    except Exception as e:
-                        logger.debug(f"Giphy search error: {e}")
-
-                # ---------- BOORU FALLBACKS (no key required) -----------
-                if provider in ("danbooru", "konachan", "yandere", "gelbooru", "rule34", "otakugifs"):
-                    booru_endpoints_map = {
-                        "danbooru": f"https://danbooru.donmai.us/posts.json?tags={tag_query}&limit=50",
-                        "konachan": f"https://konachan.com/post.json?tags={tag_query}&limit=50",
-                        "yandere": f"https://yande.re/post.json?tags={tag_query}&limit=50",
-                        "gelbooru": f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
-                        "rule34": f"https://rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&tags={tag_query}&limit=50",
-                        "otakugifs": f"https://otakugifs.xyz/api/gif?reaction={quote_plus(positive)}"
-                    }
-                    url = booru_endpoints_map.get(provider)
-                    if not url:
-                        continue
-                    try:
-                        async with session.get(url, timeout=12) as resp:
-                            if resp.status != 200:
+            # ---------- TENOR ----------
+            if provider == "tenor" and TENOR_API_KEY:
+                try:
+                    tenor_q = quote_plus(positive)
+                    tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=30&contentfilter={TENOR_CONTENT_FILTER}"
+                    async with session.get(tenor_url, timeout=12) as resp:
+                        if resp.status != 200:
+                            continue
+                        payload = await resp.json()
+                        results = payload.get("results", [])
+                        random.shuffle(results)
+                        for result in results:
+                            gif_url = None
+                            media_formats = result.get("media_formats") or result.get("media")
+                            if isinstance(media_formats, dict):
+                                gif_entry = media_formats.get("gif") or media_formats.get("nanogif") or media_formats.get("mediumgif")
+                                if gif_entry and gif_entry.get("url"):
+                                    gif_url = gif_entry.get("url")
+                            elif isinstance(media_formats, list) and media_formats:
+                                first = media_formats[0]
+                                if isinstance(first, dict):
+                                    gif_entry = first.get("gif") or first.get("tinygif")
+                                    if gif_entry and gif_entry.get("url"):
+                                        gif_url = gif_entry.get("url")
+                            if not gif_url and result.get("itemurl"):
+                                gif_url = result.get("itemurl")
+                            if not gif_url:
                                 continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=18) as gr:
+                                    if gr.status == 200:
+                                        b = await gr.read()
+                                        ext = ".gif"
+                                        ctype = gr.content_type or ""
+                                        if ".webm" in gif_url or "webm" in ctype:
+                                            ext = ".webm"
+                                        elif ".mp4" in gif_url or "mp4" in ctype:
+                                            ext = ".mp4"
+                                        name = f"tenor_{gif_hash[:6]}{ext}"
+                                        used.append(gif_hash)
+                                        if len(used) > MAX_USED_GIFS_PER_USER:
+                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                        save_data()
+                                        return b, name, gif_url
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
+
+            # ---------- GIPHY ----------
+            if provider == "giphy" and GIPHY_API_KEY:
+                try:
+                    giphy_q = quote_plus(positive)
+                    giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=30&rating={GIPHY_RATING}"
+                    async with session.get(giphy_url, timeout=12) as resp:
+                        if resp.status != 200:
+                            continue
+                        payload = await resp.json()
+                        arr = payload.get("data", [])
+                        random.shuffle(arr)
+                        for item in arr:
+                            images = item.get("images", {})
+                            gif_url = None
+                            if images and images.get("original") and images["original"].get("url"):
+                                gif_url = images["original"].get("url")
+                            if not gif_url:
+                                continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=18) as gr:
+                                    if gr.status == 200:
+                                        b = await gr.read()
+                                        ext = ".gif"
+                                        ctype = gr.content_type or ""
+                                        if ".mp4" in gif_url or "mp4" in ctype:
+                                            ext = ".mp4"
+                                        elif "webm" in ctype or ".webm" in gif_url:
+                                            ext = ".webm"
+                                        name = f"giphy_{gif_hash[:6]}{ext}"
+                                        used.append(gif_hash)
+                                        if len(used) > MAX_USED_GIFS_PER_USER:
+                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                        save_data()
+                                        return b, name, gif_url
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
+
+            # ---------- BOORUS & MIRRORS ----------
+            if provider in BOORU_ENDPOINT_TEMPLATES:
+                templates = BOORU_ENDPOINT_TEMPLATES.get(provider, [])
+                if not templates:
+                    continue
+                # pick a random template/mirror for this provider this attempt
+                template = random.choice(templates)
+                url = template.format(tag_query=tag_query)
+                try:
+                    async with session.get(url, timeout=12) as resp:
+                        if resp.status != 200:
+                            continue
+                        try:
                             posts = await resp.json()
-                            # normalize: some endpoints return dict with 'posts' key
-                            if isinstance(posts, dict) and "posts" in posts:
+                        except Exception:
+                            continue
+                        # normalize posts to list
+                        if isinstance(posts, dict):
+                            if "posts" in posts:
                                 posts = posts["posts"]
-                            if not posts:
-                                continue
-                            random.shuffle(posts)
-                            for post in posts:
-                                # Many boorus provide 'file_url' or 'large_file_url' or 'image' etc.
-                                gif_url = None
-                                for fkey in ("file_url", "large_file_url", "image_url", "jpeg_url", "source", "file", "image", "url", "preview_url"):
-                                    v = post.get(fkey)
-                                    if v:
-                                        gif_url = v
-                                        break
-                                if not gif_url:
-                                    continue
-
-                                # Defensive: ensure rating is not explicit
-                                rating = post.get("rating") or post.get("rating")
-                                if isinstance(rating, str):
-                                    if rating.lower().startswith("e"):  # explicit -> skip
-                                        continue
-                                # Skip items whose tag strings explicitly include 'rating:explicit' or explicit marker
-                                tags_field = ""
-                                if isinstance(post.get("tag_string"), str):
-                                    tags_field = post.get("tag_string")
-                                if isinstance(post.get("tags"), str) and not tags_field:
-                                    tags_field = post.get("tags")
-                                if "rating:explicit" in (tags_field or ""):
-                                    continue
-                                # Ensure blacklist not in tags
-                                if any(ex in (tags_field or "") for ex in EXCLUDE_TAGS):
-                                    continue
-
-                                # avoid duplicates
-                                gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-                                if gif_hash in used:
-                                    continue
-
-                                # try download
+                            elif "post" in posts:
+                                posts = posts["post"]
+                            else:
+                                if isinstance(posts.get("id"), (int, str)):
+                                    posts = [posts]
+                                else:
+                                    posts = []
+                        if not isinstance(posts, list):
+                            try:
+                                posts = list(posts)
+                            except Exception:
+                                posts = []
+                        if not posts:
+                            continue
+                        random.shuffle(posts)
+                        for post in posts:
+                            gif_url = None
+                            for fkey in ("file_url", "large_file_url", "image_url", "jpeg_url", "source", "file", "image", "url", "preview_url"):
                                 try:
-                                    async with session.get(gif_url, timeout=15) as gr:
-                                        if gr.status == 200:
-                                            b = await gr.read()
-                                            ctype = gr.content_type or ""
-                                            ext = ".gif"
-                                            if ".webm" in gif_url or "webm" in ctype:
-                                                ext = ".webm"
-                                            elif ".mp4" in gif_url or "mp4" in ctype:
-                                                ext = ".mp4"
-                                            elif ".png" in gif_url or "png" in ctype:
-                                                ext = ".png"
-                                            elif ".jpg" in gif_url or "jpeg" in gif_url or "jpeg" in ctype:
-                                                ext = ".jpg"
-                                            name = f"{provider.lower()}_{gif_hash[:6]}{ext}"
-                                            used.append(gif_hash)
-                                            if len(used) > MAX_USED_GIFS_PER_USER:
-                                                del used[:len(used) - MAX_USED_GIFS_PER_USER]
-                                            save_data()
-                                            return b, name, gif_url
-                                except Exception as e:
-                                    logger.debug(f"{provider} media download error: {e}")
-                    except Exception as e:
-                        logger.debug(f"{provider} query error: {e}")
+                                    v = post.get(fkey)
+                                except Exception:
+                                    v = None
+                                if v:
+                                    gif_url = v
+                                    break
+                            if not gif_url:
+                                # nested patterns
+                                if isinstance(post.get("files"), dict):
+                                    gif_url = post["files"].get("original") or post["files"].get("file")
+                            if not gif_url:
+                                continue
+                            rating = post.get("rating") or ""
+                            if isinstance(rating, str) and rating.lower().startswith("e"):
+                                continue
+                            tags_field = ""
+                            if isinstance(post.get("tag_string"), str):
+                                tags_field = post.get("tag_string")
+                            if isinstance(post.get("tags"), str) and not tags_field:
+                                tags_field = post.get("tags")
+                            if any(ex in (tags_field or "") for ex in EXCLUDE_TAGS):
+                                continue
+                            gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
+                            if gif_hash in used:
+                                continue
+                            try:
+                                async with session.get(gif_url, timeout=18) as gr:
+                                    if gr.status == 200:
+                                        b = await gr.read()
+                                        ctype = gr.content_type or ""
+                                        ext = ".gif"
+                                        if ".webm" in gif_url or "webm" in ctype:
+                                            ext = ".webm"
+                                        elif ".mp4" in gif_url or "mp4" in ctype:
+                                            ext = ".mp4"
+                                        elif ".png" in gif_url or "png" in ctype:
+                                            ext = ".png"
+                                        elif ".jpg" in gif_url or "jpeg" in gif_url or "jpeg" in ctype:
+                                            ext = ".jpg"
+                                        name = f"{provider.lower()}_{gif_hash[:6]}{ext}"
+                                        used.append(gif_hash)
+                                        if len(used) > MAX_USED_GIFS_PER_USER:
+                                            del used[:len(used) - MAX_USED_GIFS_PER_USER]
+                                        save_data()
+                                        return b, name, gif_url
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
 
-        # if here, no provider produced a fresh gif for this user this call
-    # nothing found
+        # no provider produced a fresh gif this call
     return None, None, None
 
 # -------------------------
