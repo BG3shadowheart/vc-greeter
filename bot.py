@@ -86,7 +86,19 @@ NUDE_TAGS = [
     "pussy", "vagina", "penis", "cock", "dick", "balls",
     "penetration", "sex", "fuck", "cum", "ejac", "orgasm",
     "genitals", "spread_legs", "exposed", "nip slip", "nipples_visible",
-    "explicit", "nsfw_high"
+    "explicit", "nsfw_high", "nude", "naked", "topless", "bottomless",
+    "nipples", "pussy", "vagina", "penis", "cock",
+    "genitals", "uncensored", "censored", "mosaic",
+    "areola", "breasts_out", "no_clothes", "spread_legs",
+    "penetration", "sex", "fuck", "cum", "ejaculation",
+    "fellatio", "blowjob", "titty_fuck", "handjob",
+
+    # Futanari-related (your request)
+    "futanari", "futa", "dickgirl", "newhalf",
+    "hermaphrodite", "shemale", "trap", "trans", "transgirl",
+
+    # Extreme explicit category hints
+    "explicit", "rating:explicit", "hentai_explicit"
 ]
 
 def contains_nude_indicators(text):
