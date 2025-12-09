@@ -56,13 +56,10 @@ GIF_TAGS = [
     "anime thick thighs","anime booty","anime booty shorts","anime lingerie girl",
     "anime bikini girl","anime teasing anime girl","anime mature woman","anime older waifu",
     "anime charm girl","anime flirty","anime sensual","anime blushing girl",
-    # romantic / kiss / hug
     "anime kiss","anime couple kiss","anime romantic","romantic anime",
     "anime hug","cute anime hug","anime love","anime couple hug",
-    # user requested explicit-ish tags (kept; boorus will use rating:questionable)
     "sexy anime girl","horny anime","horny waifu","sexy milf anime",
     "anime milf horny","romantic hentai","ecchi kiss","ecchi hug",
-    # extras for variety
     "anime cleavage","anime cosplay sexy","anime playful pose","anime seductive glance",
     "anime softcore","anime teasing pose","anime thighfocus","anime chest focus"
 ]
@@ -84,12 +81,9 @@ _RAW_BLOCKS = [
     # anatomy / nudity
     "nude", "naked", "no clothes", "no_clothes", "topless", "bottomless",
     "nipples", "nip slip", "nipples visible", "nipples_visible", "areola", "areolas",
-    "breasts out", "breasts_out", "breast", "breasts", "boobs", "tits", "big tits", "cleavage",
     "pussy", "vagina", "vaginal", "labia", "clitoris",
     "penis", "cock", "dick", "shaft", "balls", "testicles", "scrotum",
-    "anus", "butt", "buttocks", "ass", "buttcheeks", "rump",
-
-    # sexual acts / positions / scenes
+    "anus", "butt", "buttocks", "buttcheeks", "rump",
     "sex", "sexual", "penetration", "penetrating", "penetrated",
     "oral", "fellatio", "blowjob", "deepthroat", "deep throat", "cunnilingus", "rimming",
     "anal", "anal sex", "analingus", "doggystyle", "doggy style", "missionary", "cowgirl",
@@ -98,51 +92,27 @@ _RAW_BLOCKS = [
     "ejac", "ejaculation", "orgasm", "masturbation", "masturbate", "fingering",
     "handjob", "titty fuck", "titty_fuck", "facefuck", "facesitting", "face-sitting",
     "spanking", "voyeur", "exposed", "exposure", "presenting", "presenting anus",
-    "presenting pussy", "spreading", "spread legs", "spread_legs", "spread anus", "spread_anus",
-
-    # porn / explicit metadata
+    "presenting pussy", "spreading", "spread legs", "spread anus", "spread_anus",
     "porn", "pornography", "xxx", "18+", "adult", "nsfw", "nsfw_high", "explicit",
     "rating:explicit", "hentai explicit", "hentai_explicit", "uncensored", "censored", "mosaic",
-
-    # fetishes / BDSM / roleplay
     "fetish", "fetishes", "bdsm", "bondage", "dominant", "submissive", "dom", "sub",
     "kink", "latex", "leather", "humiliation",
     "vore", "fisting", "watersports", "golden shower", "urophilia",
     "scat", "bestiality", "zoophilia", "bestial", "incest", "rape", "sexual assault",
     "non-consensual", "forced",
-
-    # trans / intersex / niche adult tags
     "futanari", "futa", "dickgirl", "newhalf", "hermaphrodite",
     "shemale", "trap", "trans", "transgirl", "transwoman", "transman",
-
-    # toys / implements
     "dildo", "vibrator", "sex toy", "strapon", "strap-on", "anal beads",
-
-    # descriptors / porn genres / slang
     "cumshot", "creampie", "gokkun", "facial", "creampie anal", "creampie vaginal",
     "deep throat", "blow job", "fingering", "fingered",
-
-    # costumes / cosplay used sexually (be careful; not minors)
-    "cosplay", "maid outfit", "school uniform", "uniform", "lingerie", "panties",
-    "schoolgirl", "schoolboy",  # kept as tag but EXCLUDE_TAGS removes minors — see below
-
-    # popular game/character tags used in adult content (user provided)
-    "overwatch", "fire emblem", "fire emblem: three houses", "nintendo",
-    "rhea (fire emblem)", "thiccwithaq", "gorgeous mushroom",
-
-    # other user-specified / common explicit tags
     "porn comics", "sex comics", "hentai", "ecchi", "yuri", "yaoi",
     "gay porn", "lesbian porn", "straight porn", "bisexual porn",
     "swingers", "threesome", "foursome", "sex party",
-
-    # misc slang / variations
-    "tits", "boob", "boobs", "arse", "buttfuck", "assfuck", "cumshots",
+    "arse", "buttfuck", "assfuck", "cumshots",
     "pornstar", "porn star", "escort", "camgirl", "camming", "cam model", "onlyfans", "only fans",
     "naughty", "lewd", "dirty", "explicit content", "nsfw content",
-
-    # user-provided extras
     "thiccwithaq", "presenting anus", "looking back", "presenting", "spread anus",
-    "thicc", "thicc thighs", "big penis", "big penis", "anal", "fetish", "gorgeous mushroom"
+    "big penis", "big penis", "anal", "fetish", "gorgeous mushroom"
 ]
 
 # Dedupe & normalize helper
