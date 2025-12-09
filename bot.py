@@ -132,20 +132,46 @@ SIMPLE_APIS = {
 # Soft = block only if 3+ matches
 # -------------------------
 HARD_TAGS = [
-    "pussy","vagina","labia","clitoris",
-    "penis","cock","dick","shaft","testicles","balls",
-    "anus",
-    "sex","penetration","penetrating","penetrated",
-    "blowjob","deepthroat","oral","fellatio","handjob",
-    "cum","cumshot","ejac","orgasm","masturbation",
-    "titty fuck","facefuck","facesitting",
-    "anal sex","doggystyle","cowgirl","69","threesome","foursome",
-    "group sex","orgy","gangbang","double penetration","dp",
-    "creampie","facial",
-    "explicit","xxx","nsfw_high","hentai explicit",
-    "uncensored","porn","pornography","sex toy","strapon",
-    "bestiality","scat","watersports","fisting",
-    # remove sexual orientation words that are harmless; keep anatomy/acts
+
+    # --- Genitals (always block) ---
+    "pussy", "vagina", "labia", "clitoris",
+    "penis", "cock", "dick", "shaft",
+    "testicles", "balls", "scrotum",
+    "anus", "open pussy", "spread pussy",
+    "uncensored pussy",
+
+    # --- Visible explicit nudity ---
+    "naked female", "nude female", "explicit nude",
+    "bare breasts", "nipples out", "nipples visible",
+    "areola visible", "spread legs explicit",
+
+    # --- Sexual acts ---
+    "sex", "penetration", "penetrating", "penetrated",
+    "anal sex", "doggystyle", "cowgirl", "double penetration",
+    "group sex", "threesome", "foursome", 
+    "69", "orgy", "gangbang",
+
+    # --- Oral / hand actions ---
+    "blowjob", "deepthroat", "oral", "fellatio",
+    "handjob", "titty fuck", "facefuck", "facesitting",
+
+    # --- Ejaculation / cum ---
+    "cum", "cumshot", "cum shot", "creampie",
+    "facial", "ejac", "ejaculation", "ejaculation face",
+    "cum in mouth", "cum in face",
+    "cum_on_face", "cum_on_mouth", "cum_in_mouth",
+    "cum covered", "cum cover", "cum drip",
+
+    # --- Porn / explicit media ---
+    "porn", "pornography", "xxx", "explicit",
+    "hentai explicit", "hentai uncensored",
+    "nsfw uncensored", "uncensored",
+
+    # --- Extreme / illegal ---
+    "bestiality", "watersports", "scat", "fisting",
+
+    # --- Toys / fetish ---
+    "sex toy", "strapon"
 ]
 
 SOFT_TAGS = [
