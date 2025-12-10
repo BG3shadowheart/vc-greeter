@@ -1,8 +1,4 @@
 # bot.py
-# Full updated file — providers now use the 'positive' tag parameter when possible.
-# (Everything else is the same functionality: join VC, send randomized greetings + GIFs,
-# per-user no-repeat history, fused visual moderation, disconnect when alone.)
-
 import os
 import io
 import json
@@ -11,7 +7,7 @@ import hashlib
 import logging
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote_plus, urlparse
 import aiohttp
 import discord
@@ -38,14 +34,15 @@ DEEPAI_KEY = os.getenv("DEEPAI_KEY")  # optional DeepAI key
 DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 
 # -------------------------
-# Your VC IDs and text channel (edit these to your actual IDs)
+# Your VC IDs and text channel
 # -------------------------
 VC_IDS = [
-    1353875050809524267,
-    21409170559337762980,
+    1430122700525010997,
     1353875404217253909,
     1353882705246556220
 ]
+
+# This must be a TEXT channel ID where the bot sends the welcome image
 VC_CHANNEL_ID = 1446752109151260792
 
 # -------------------------
@@ -1112,7 +1109,7 @@ LEAVE_GREETINGS = [
     "📸 {display_name} left — last frame a smirk.",
     "🪙 {display_name} left — coin flicked into the void.",
     "🧩 {display_name} walked off — puzzle missing a piece.",
-    "🪞 {display_name} left — reflection smiles alone.",
+    "𪞞 {display_name} left — reflection smiles alone.",
     "🌸 {display_name} drifted away — petals to the wind.",
     "💌 {display_name} left — letter sealed and mailed.",
     "🏵️ {display_name} departed — floral farewell.",
@@ -1122,7 +1119,7 @@ LEAVE_GREETINGS = [
     "🍡 {display_name} walked away — dango leftover.",
     "🧨 {display_name} vanished — sparkles died down.",
     "🛏️ {display_name} left — nap time continues elsewhere.",
-    "🪶 {display_name} left — feather trails behind.",
+    "𪪶 {display_name} left — feather trails behind.",
     "🛸 {display_name} left — alien waifu gone."
 ]
 
@@ -1134,7 +1131,8 @@ while len(LEAVE_GREETINGS) < 100:
 # -------------------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.purple() if kind == "join" else discord.Color.dark_gray()
-    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
+    # Fixed deprecated utcnow()
+    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.now(timezone.utc))
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
