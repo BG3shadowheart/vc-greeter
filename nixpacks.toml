@@ -1,30 +1,19 @@
 # nixpacks.toml
-# Minimal Nixpacks config to install requirements and run the bot.
-# Adjust PYTHON_VERSION or run.command if your host needs a different start command.
-
 [project]
 name = "discord-waifu-bot"
 
 [env]
-# Recommended Python minor version (change to 3.11 if you prefer)
 PYTHON_VERSION = "3.10"
 
 [phases.setup]
-# Commands executed in the build/setup phase
 commands = [
-  # ensure pip is modern, then install Python deps from requirements.txt
   "python -m pip install --upgrade pip setuptools wheel",
   "python -m pip install -r requirements.txt"
 ]
 
 [build]
-# Nothing special to build (we install in setup)
 command = "true"
 
 [run]
-# This is the command Nixpacks will run to start your app
-command = "python bot_spiciest_final_v3_with_vcjoin.py"
-
-# Optional: expose a port if your host routes HTTP (bot itself doesn't need HTTP)
-# [services]
-# http = { port = 8080 }
+# Changed to standard "bot.py"
+command = "python bot.py"
