@@ -43,7 +43,7 @@ VC_IDS = [
 ]
 
 # This must be a TEXT channel ID where the bot sends the welcome image
-VC_CHANNEL_ID = 1446752109151260792
+TEXT_CHANNAL_ID = 1446752109151260792
 
 # -------------------------
 # Files & limits
