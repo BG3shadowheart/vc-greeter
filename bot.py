@@ -1,4 +1,19 @@
-# bot.py
+# bot_spiciest_final_v3_with_vcjoin.py
+# Final safe-spicy anime welcome bot v3 (voice-join enabled)
+# - 15+ safe anime providers (no booru/porn)
+# - Option A nudity rules (HARD always block, SOFT block if 3+ matches)
+# - Random provider + random tag each request
+# - Per-user no-repeat history (stored in data.json)
+# - 100+ spicy join & leave greetings
+# - Owner commands: !testgif, !setweight, !weights
+# - Bot will JOIN the VC when a user joins a monitored VC and LEAVE when it's alone
+#
+# ENV:
+# TOKEN (required)
+# TENOR_API_KEY, GIPHY_API_KEY, WAIFUIM_API_KEY, WAIFUIT_API_KEY, FLUXPOINT_API_KEY (optional)
+#
+# Run: python bot_spiciest_final_v3_with_vcjoin.py
+
 import os
 import io
 import json
@@ -7,19 +22,11 @@ import hashlib
 import logging
 import re
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from urllib.parse import quote_plus, urlparse
 import aiohttp
 import discord
 from discord.ext import commands, tasks
-
-# visual moderation libs
-import requests
-try:
-    from google.cloud import vision
-    vision_client = vision.ImageAnnotatorClient()
-except Exception:
-    vision_client = None
 
 # -------------------------
 # Environment / keys
@@ -30,53 +37,32 @@ GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 WAIFUIM_API_KEY = os.getenv("WAIFUIM_API_KEY")
 WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")
 FLUXPOINT_API_KEY = os.getenv("FLUXPOINT_API_KEY")
-DEEPAI_KEY = os.getenv("DEEPAI_KEY")  # optional DeepAI key
 DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 
 # -------------------------
-# Your VC IDs and text channel
+# Your VC IDs and text channel (copied / preserved)
 # -------------------------
 VC_IDS = [
     1353875050809524267,
+    21409170559337762980,
     1353875404217253909,
     1353882705246556220
 ]
-
-# This must be a TEXT channel ID where the bot sends the welcome image
-TEXT_CHANNAL_ID = 1446752109151260792
+VC_CHANNEL_ID = 1446752109151260792
 
 # -------------------------
 # Files & limits
 # -------------------------
-DATA_FILE = "data.json"
+DATA_FILE = "data.json"             # holds join_counts, used_gifs, provider_weights, sent_history
 AUTOSAVE_INTERVAL = 30
-MAX_USED_GIFS_PER_USER = 1000
-FETCH_ATTEMPTS = 60
-
-# -------------------------
-# Admin config
-# -------------------------
-ADMINS = []
-ADMIN_ROLE_NAME = "BotAdmin"
-
-def is_admin(member: discord.Member) -> bool:
-    if not member:
-        return False
-    try:
-        if member.id in ADMINS:
-            return True
-        if ADMIN_ROLE_NAME:
-            for r in member.roles:
-                if r.name == ADMIN_ROLE_NAME:
-                    return True
-    except Exception:
-        pass
-    return False
+MAX_USED_GIFS_PER_USER = 1000       # memory cap per user
+FETCH_ATTEMPTS = 60                 # attempts per fetch cycle
 
 # -------------------------
 # Spicy tag pool (extended)
 # -------------------------
 GIF_TAGS = [
+    # core spicy
     "busty","big breasts","oppai","busty anime","huge breasts","big boobs",
     "milf","mommy","mature","mature anime","older waifu","mommy waifu",
     "thick","thicc","thick thighs","thighs","thighfocus","anime thick thighs",
@@ -92,12 +78,15 @@ GIF_TAGS = [
     "anime tease","anime flirt","soft erotic","suggestive pose","playful tease",
     "side profile cleavage","hip sway","shimmy","dance tease",
     "bouncy","nip slip","peekaboo","portrait cleavage",
+    # extras to diversify queries
     "oppai focus","underboob tease","thighs focus","panties peek",
     "mature waifu","older sister waifu","maid outfit","cute cosplay","lingerie model"
 ]
 
 # -------------------------
-# Providers (safe + curated)
+# Providers (safe + added curated ones)
+# - We won't include booru-style providers (rule34, danbooru, gelbooru, etc.)
+# - This list is intentionally broad; fetchers are defensive
 # -------------------------
 PROVIDERS = [
     "waifu_pics",
@@ -122,31 +111,41 @@ USE_TENOR = bool(TENOR_API_KEY)
 USE_GIPHY = bool(GIPHY_API_KEY)
 
 # -------------------------
-# Moderation tags & heuristics
+# Moderation lists (Option A)
+# HARD_TAGS = immediate block (1 match)
+# SOFT_TAGS = block if 3+ matches
 # -------------------------
 HARD_TAGS = [
     "pussy","vagina","labia","clitoris",
     "penis","cock","dick","shaft","testicles","balls","scrotum","anus",
     "open pussy","spread pussy","uncensored pussy",
+
     "bare breasts","nipples visible","areola visible","nipples out","nipple visible",
     "nude female","naked female","explicit nude","spread legs explicit",
+
     "sex","penetration","penetrating","penetrated","anal sex","anal penetration",
     "double penetration","dp","threesome","foursome","group sex",
     "orgy","gangbang","69","blowjob","deepthroat","oral","fellatio",
     "handjob","titty fuck","facefuck","facesitting","creampie","facial",
+
     "cum","cumshot","cum shot","ejac","ejaculation",
     "cum in mouth","cum in face","cum_on_face","cum_in_mouth",
     "cum covered","cum drip",
+
     "porn","pornography","xxx","explicit","uncensored",
     "hentai explicit","hentai uncensored",
+
     "bestiality","scat","watersports","fisting","sex toy","strapon",
+
     "futa","futanari","futanary",
     "hentai","nsfw","shemale","trap",
     "loli","shota","underage","minor","incest",
     "vore","bdsm","daddy",
     "father","mother","rape","yuri",
+    
     "gay porn","gay hentai","trans porn","trans hentai",
     "futa hentai","futa porn",
+
     "male male","male x male","male×male","m/m","m x m",
     "male love","male romance","male cuddling",
     "male kissing","male kiss","boy kiss","boys kissing",
@@ -157,10 +156,13 @@ HARD_TAGS = [
     "male flirting","male touching","gay touch","gay scene",
     "gay moment","male couple","bl scene","bl couple",
     "gay anime couple","gay anime kiss","boy x boy",
+
+    # Newly added unique tags
     "dross","2boys","blush","brown hair","duo",
     "elf","elf ears","elf male","femboy","functionally nude",
     "green eyes","light-skinned male","thighhighs","twink", "blowjob"
 ]
+
 
 SOFT_TAGS = [
     "nude","naked","topless","bottomless",
@@ -173,13 +175,14 @@ SOFT_TAGS = [
     "underboob","sideboob","nip slip"
 ]
 
+# Quick filename/url block keywords (pre-download)
 FILENAME_BLOCK_KEYWORDS = [
     "cum", "pussy", "nude", "naked", "penis", "cock", "vagina",
     "explicit", "uncensored", "xxx", "hentai", "orgy", "creampie",
-    "facial", "scat", "fisting", "bestiality",
-    "trap", "shemale", "femboy", "yaoi", "twink", "2boys", "gay"
+    "facial", "scat", "fisting", "bestiality"
 ]
 
+# Exclude underage / illegal tags if provider returns tags
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
 # -------------------------
@@ -199,6 +202,7 @@ def _normalize_text(s: str) -> str:
     return s
 
 def analyze_nudity_indicators(text: str):
+    """Return (hard_found:bool, soft_count:int)."""
     if not text or not isinstance(text, str):
         return False, 0
     normalized = _normalize_text(text)
@@ -252,9 +256,9 @@ with open(DATA_FILE, "r") as f:
 data.setdefault("join_counts", {})
 data.setdefault("used_gifs", {})
 data.setdefault("provider_weights", {})
-data.setdefault("sent_history", {})
+data.setdefault("sent_history", {})  # per-user set of gif hashes/urls to avoid repeats
 
-# default provider weights
+# default provider weights (you can tweak at runtime)
 default_weights = {
     "waifu_pics": 12,
     "waifu_im": 10,
@@ -297,6 +301,7 @@ def build_provider_pool():
         if weight <= 0:
             continue
         pool.extend([prov] * max(1, int(weight)))
+    # ensure tenor/giphy presence if keys provided
     if USE_TENOR and "tenor" not in pool:
         pool.extend(["tenor"] * 3)
     if USE_GIPHY and "giphy" not in pool:
@@ -305,70 +310,9 @@ def build_provider_pool():
     return pool
 
 # -------------------------
-# Visual moderation helpers (fusion)
-# -------------------------
-_VISION_LEVELS = {
-    'UNKNOWN': 0,
-    'VERY_UNLIKELY': 1,
-    'UNLIKELY': 2,
-    'POSSIBLE': 3,
-    'LIKELY': 4,
-    'VERY_LIKELY': 5
-}
-
-def _vision_safe_search_levels(image_bytes: bytes):
-    if not vision_client:
-        return None, None
-    try:
-        image = vision.Image(content=image_bytes)
-        resp = vision_client.safe_search_detection(image=image)
-        ann = resp.safe_search_annotation
-        adult = _VISION_LEVELS.get(getattr(ann.adult, "name", "UNKNOWN"), 0)
-        racy  = _VISION_LEVELS.get(getattr(ann.racy, "name", "UNKNOWN"), 0)
-        return adult, racy
-    except Exception:
-        return None, None
-
-def _deepai_nsfw_score(image_bytes: bytes, timeout=15):
-    if not DEEPAI_KEY:
-        return None
-    try:
-        r = requests.post(
-            "https://api.deepai.org/api/nsfw-detector",
-            files={'image': ('image.jpg', image_bytes)},
-            headers={'api-key': DEEPAI_KEY},
-            timeout=timeout
-        )
-        j = r.json()
-        score = None
-        if isinstance(j, dict):
-            score = j.get('nsfw_score') or (j.get('output') or {}).get('nsfw_score')
-            if score is None:
-                det = (j.get('output') or {}).get('detections') or j.get('detections') or []
-                if isinstance(det, list) and det:
-                    confs = [d.get('confidence', 0.0) for d in det if isinstance(d, dict)]
-                    if confs:
-                        score = max(confs)
-        if score is None:
-            return None
-        return float(score)
-    except Exception:
-        return None
-
-def _supporting_textual_signal(url_or_name: str, meta_text: str) -> bool:
-    try:
-        if filename_has_block_keyword(url_or_name):
-            return True
-        if contains_nude_indicators(url_or_name):
-            return True
-        if contains_nude_indicators(meta_text):
-            return True
-    except Exception:
-        pass
-    return False
-
-# -------------------------
-# Provider fetcher helpers (use 'positive' when possible)
+# Provider fetcher helpers (defensive)
+# Each fetcher returns (bytes, filename, source_url) or (None,None,None)
+# We try to be robust: many endpoints are similar; if one fails, skip.
 # -------------------------
 async def _download_url(session, url, timeout=18):
     try:
@@ -379,52 +323,16 @@ async def _download_url(session, url, timeout=18):
             if "html" in ctype:
                 return None, None
             b = await resp.read()
-
-            adult_level, racy_level = _vision_safe_search_levels(b)
-            deepai_score = _deepai_nsfw_score(b) if DEEPAI_KEY else None
-            textual_signal = _supporting_textual_signal(url, "")
-
-            if adult_level is not None:
-                if adult_level >= _VISION_LEVELS['VERY_LIKELY'] or racy_level >= _VISION_LEVELS['VERY_LIKELY']:
-                    logger.info(f"Visual block (vision VERY_LIKELY) for {url}")
-                    return None, None
-                if adult_level >= _VISION_LEVELS['LIKELY'] or racy_level >= _VISION_LEVELS['LIKELY']:
-                    if textual_signal:
-                        logger.info(f"Visual+text block (vision LIKELY + textual) for {url}")
-                        return None, None
-                if adult_level >= _VISION_LEVELS['POSSIBLE'] or racy_level >= _VISION_LEVELS['POSSIBLE']:
-                    if filename_has_block_keyword(url) or contains_nude_indicators(url):
-                        logger.info(f"Visual POSSIBLE + strong filename/meta -> block {url}")
-                        return None, None
-
-            if deepai_score is not None:
-                if deepai_score >= 0.85:
-                    logger.info(f"DeepAI strong block (score {deepai_score:.2f}) for {url}")
-                    return None, None
-                if deepai_score >= 0.6:
-                    if textual_signal:
-                        logger.info(f"DeepAI {deepai_score:.2f} + textual -> block {url}")
-                        return None, None
-
-            if filename_has_block_keyword(url):
-                logger.info(f"Filename heuristic block for {url}")
-                return None, None
-            if contains_nude_indicators(url):
-                logger.info(f"URL heuristic nude-indicators block for {url}")
-                return None, None
-
             return b, ctype
-    except Exception as e:
-        logger.exception(f"_download_url error for {url}: {e}")
+    except Exception:
         return None, None
 
 # Provider: waifu.pics
 async def fetch_from_waifu_pics(session, positive):
     try:
-        # waifu.pics has fixed categories — use 'positive' only if it matches known category
-        known = {"waifu","neko","maid","oppai","bikini","blowjob","trap"}
-        chosen = positive if positive in known else random.choice(list(known))
-        url = f"https://api.waifu.pics/nsfw/{chosen}"
+        categories = ["waifu","neko","maid","oppai","bikini","blowjob","trap"]
+        category = random.choice(categories)
+        url = f"https://api.waifu.pics/nsfw/{category}"
         async with session.get(url, timeout=12) as resp:
             if resp.status != 200:
                 return None, None, None
@@ -447,8 +355,8 @@ async def fetch_from_waifu_pics(session, positive):
 async def fetch_from_waifu_im(session, positive):
     try:
         base = "https://api.waifu.im/search"
-        # waifu.im supports included_tags — pass positive directly
-        params = {"included_tags": positive, "is_nsfw": "true"}
+        tag = random.choice(["oppai","ecchi","milf","maid","bikini","lingerie","swimsuit","cleavage"])
+        params = {"included_tags": tag, "is_nsfw": "true"}
         headers = {}
         if WAIFUIM_API_KEY:
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
@@ -465,7 +373,7 @@ async def fetch_from_waifu_im(session, positive):
                 return None, None, None
             if filename_has_block_keyword(gif_url):
                 return None, None, None
-            meta_text = " ".join(filter(None, [str(img.get("tags", "")), img.get("source", ""), str(img.get("is_nsfw", ""))]))
+            meta_text = " ".join(filter(None, [img.get("tags", ""), img.get("source", ""), str(img.get("is_nsfw", ""))]))
             if contains_nude_indicators(meta_text) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
@@ -476,19 +384,14 @@ async def fetch_from_waifu_im(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: waifu.it
+# Provider: waifu.it (random)
 async def fetch_from_waifu_it(session, positive):
     try:
-        # this provider is random — attempt to include tag in query if supported
         base = "https://waifu.it/api/waifu/random"
         headers = {}
         if WAIFUIT_API_KEY:
             headers["Authorization"] = f"Bearer {WAIFUIT_API_KEY}"
-        # try tag-in-path variant if positive is simple
-        url = base
-        if positive and len(positive) < 40:
-            url = f"https://waifu.it/api/waifu/random?tag={quote_plus(positive)}"
-        async with session.get(url, headers=headers, timeout=12) as resp:
+        async with session.get(base, headers=headers, timeout=12) as resp:
             if resp.status != 200:
                 return None, None, None
             payload = await resp.json()
@@ -504,8 +407,7 @@ async def fetch_from_waifu_it(session, positive):
             if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"waifu_it_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -515,10 +417,8 @@ async def fetch_from_waifu_it(session, positive):
 # Provider: nekos.best
 async def fetch_from_nekos_best(session, positive):
     try:
-        # nekos.best has set of categories — use 'positive' if it matches
-        known = {"hug","kiss","pat","cuddle","dance","poke","slap","neko","waifu"}
-        chosen = positive if positive in known else random.choice(list(known))
-        url = f"https://nekos.best/api/v2/{chosen}"
+        category = random.choice(["hug","kiss","pat","cuddle","dance","poke","slap","neko","waifu"])
+        url = f"https://nekos.best/api/v2/{category}"
         async with session.get(url + "?amount=1", timeout=12) as resp:
             if resp.status != 200:
                 return None, None, None
@@ -533,8 +433,7 @@ async def fetch_from_nekos_best(session, positive):
             if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_best_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -544,9 +443,9 @@ async def fetch_from_nekos_best(session, positive):
 # Provider: nekos.life
 async def fetch_from_nekos_life(session, positive):
     try:
-        known = ["ngif","neko","kiss","hug","cuddle","pat","wink","slap"]
-        chosen = positive if positive in known else random.choice(known)
-        url = f"https://nekos.life/api/v2/img/{chosen}"
+        categories = ["ngif","neko","kiss","hug","cuddle","pat","wink","slap"]
+        category = random.choice(categories)
+        url = f"https://nekos.life/api/v2/img/{category}"
         async with session.get(url, timeout=12) as resp:
             if resp.status != 200:
                 return None, None, None
@@ -557,22 +456,21 @@ async def fetch_from_nekos_life(session, positive):
             if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_life_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
     except Exception:
         return None, None, None
 
-# Provider: generic nekos_api attempts
+# Provider: nekos_api / nekosapi sites (generic attempts)
 async def fetch_from_nekos_api(session, positive):
     try:
-        # many endpoints don't accept free tags — but try a candidate with positive appended
+        # try a few common endpoints flexibly
         candidates = [
-            f"https://v1.nekosapi.com/api/images/random?type={quote_plus(positive)}",
+            "https://v1.nekosapi.com/api/images/random",
             "https://nekos.moe/api/random",
-            f"https://nekosapi.com/api/images/random?type={quote_plus(positive)}",
+            "https://nekosapi.com/api/images/random",
             "https://api.nekosapi.com/v4/images/random"
         ]
         random.shuffle(candidates)
@@ -582,8 +480,9 @@ async def fetch_from_nekos_api(session, positive):
                     if resp.status != 200:
                         continue
                     payload = await resp.json()
-                    gif_url = None
+                    # payload parsing variations
                     if isinstance(payload, dict):
+                        # find common fields
                         gif_url = payload.get("url") or payload.get("image") or payload.get("file") or payload.get("src")
                         if not gif_url and payload.get("data"):
                             d = payload.get("data")
@@ -591,8 +490,12 @@ async def fetch_from_nekos_api(session, positive):
                                 gif_url = d[0].get("url") or d[0].get("file")
                             elif isinstance(d, dict):
                                 gif_url = d.get("url") or d.get("file")
+                        if not gif_url:
+                            continue
                     elif isinstance(payload, list) and payload:
                         gif_url = payload[0].get("url") or payload[0].get("file")
+                    else:
+                        continue
                     if not gif_url:
                         continue
                     if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
@@ -609,7 +512,7 @@ async def fetch_from_nekos_api(session, positive):
         return None, None, None
     return None, None, None
 
-# Provider: nekos.moe
+# Provider: nekos_moe (attempt)
 async def fetch_from_nekos_moe(session, positive):
     try:
         url = "https://nekos.moe/api/v3/gif/random"
@@ -617,6 +520,7 @@ async def fetch_from_nekos_moe(session, positive):
             if resp.status != 200:
                 return None, None, None
             payload = await resp.json()
+            # payload may have 'images' array
             gifs = payload.get("images") or payload.get("data") or []
             if isinstance(gifs, dict):
                 gifs = [gifs]
@@ -637,7 +541,7 @@ async def fetch_from_nekos_moe(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: nekoapi
+# Provider: nekoapi (attempt)
 async def fetch_from_nekoapi(session, positive):
     try:
         candidates = [
@@ -696,10 +600,8 @@ async def fetch_from_otakugifs(session, positive):
 # Provider: fluxpoint
 async def fetch_from_fluxpoint(session, positive):
     try:
-        # fluxpoint endpoint expects category — use positive when it matches or choose random
-        known = ["baka","hug","kiss","pat","slap","poke","neko","dance","blush","wink"]
-        chosen = positive if positive in known else random.choice(known)
-        url = f"https://api.fluxpoint.dev/sfw/gif/{chosen}"
+        category = random.choice(["baka","hug","kiss","pat","slap","poke","neko","dance","blush","wink"])
+        url = f"https://api.fluxpoint.dev/sfw/gif/{category}"
         headers = {}
         if FLUXPOINT_API_KEY:
             headers["Authorization"] = FLUXPOINT_API_KEY
@@ -721,20 +623,15 @@ async def fetch_from_fluxpoint(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: waifuapi_alt (uses waifu.pics endpoints)
+# Provider: generic alt waifu api (waifuapi_alt)
 async def fetch_from_waifuapi_alt(session, positive):
     try:
-        # attempt to use positive if it matches known categories else fallback
         candidates = [
             "https://api.waifu.pics/nsfw/oppai",
             "https://api.waifu.pics/nsfw/bikini",
             "https://api.waifu.pics/nsfw/maid"
         ]
-        known = {"oppai","bikini","maid"}
-        if positive in known:
-            url = f"https://api.waifu.pics/nsfw/{positive}"
-        else:
-            url = random.choice(candidates)
+        url = random.choice(candidates)
         async with session.get(url, timeout=10) as resp:
             if resp.status != 200:
                 return None, None, None
@@ -752,7 +649,7 @@ async def fetch_from_waifuapi_alt(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: latapi
+# Provider: latapi (attempt)
 async def fetch_from_latapi(session, positive):
     try:
         candidates = [
@@ -781,7 +678,7 @@ async def fetch_from_latapi(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: animegirls_online
+# Provider: animegirls_online (attempt)
 async def fetch_from_animegirls_online(session, positive):
     try:
         candidates = [
@@ -811,7 +708,7 @@ async def fetch_from_animegirls_online(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: Tenor (uses positive)
+# Provider: Tenor (safe-medium)
 async def fetch_from_tenor(session, positive):
     if not TENOR_API_KEY:
         return None, None, None
@@ -858,7 +755,7 @@ async def fetch_from_tenor(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: Giphy (uses positive)
+# Provider: Giphy (safe)
 async def fetch_from_giphy(session, positive):
     if not GIPHY_API_KEY:
         return None, None, None
@@ -907,7 +804,6 @@ PROVIDER_FETCHERS = {
     "nekoapi": fetch_from_nekoapi,
     "otakugifs": fetch_from_otakugifs,
     "fluxpoint": fetch_from_fluxpoint,
-    "nekosapi_v1": fetch_from_nekos_api,
     "waifuapi_alt": fetch_from_waifuapi_alt,
     "latapi": fetch_from_latapi,
     "animegirls_online": fetch_from_animegirls_online,
@@ -916,7 +812,10 @@ PROVIDER_FETCHERS = {
 }
 
 # -------------------------
-# Master fetcher: picks random provider and random tag (positive) each attempt
+# Master fetcher:
+# - random provider from weighted pool
+# - random tag
+# - avoids duplicates per user (using data["sent_history"])
 # -------------------------
 async def fetch_gif(user_id):
     user_key = str(user_id)
@@ -940,14 +839,19 @@ async def fetch_gif(user_id):
             b, name, gif_url = result
             if not gif_url:
                 continue
+            # final domain/filename check
             if filename_has_block_keyword(gif_url):
                 continue
             if contains_nude_indicators(gif_url):
                 continue
+            # compute stable id for gif_url
             gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
+            # avoid repeats to same user
             if gif_hash in sent:
                 continue
+            # store in history (append)
             sent.append(gif_hash)
+            # cap history size per user
             if len(sent) > MAX_USED_GIFS_PER_USER:
                 del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
             save_data()
@@ -955,174 +859,8 @@ async def fetch_gif(user_id):
     return None, None, None
 
 # -------------------------
-# JOIN / LEAVE greetings (unchanged)
+# 100+ join and leave greetings (spicy but not explicit)
 # -------------------------
-JOIN_GREETINGS = [
-    "🌸 {display_name} sashays into the scene — waifu energy rising!",
-    "✨ {display_name} arrived and the room got a whole lot warmer.",
-    "🔥 {display_name} joined — clutch your hearts (and waifus).",
-    "💫 {display_name} appears — the waifu meter spikes.",
-    "🍑 {display_name} walked in — cheeks feeling watched.",
-    "😏 {display_name} entered — someone brought snacks and thighs.",
-    "🎀 {display_name} steps in — cute, spicy, and a little extra.",
-    "🩷 {display_name} joined — cleavage alert in 3...2...1.",
-    "🌙 {display_name} arrives — moonlight + waifu vibes.",
-    "🦊 {display_name} has joined — foxiness overload.",
-    "💃 {display_name} joined — shake it, waifu style.",
-    "🎴 {display_name} appears — draw that lucky card, baby.",
-    "🍡 {display_name} came — sweet, tempting, and blushing.",
-    "🌶️ {display_name} arrived — a little spice never hurt.",
-    "🪩 {display_name} joined — ready to party and flirt.",
-    "👑 {display_name} enters — royalty of the flirty league.",
-    "🌺 {display_name} joined — flowers + flirts incoming.",
-    "🍑 Thicc vibes as {display_name} arrives.",
-    "✨ Stars twinkle — {display_name} is here to slay.",
-    "🥂 {display_name} has entered — cheers to the waifu life.",
-    "🫠 {display_name} joined — melting hearts left and right.",
-    "🎯 {display_name} arrived — hit the target of spiciness.",
-    "🧋 {display_name} stepped in — sweet bubble tea energy.",
-    "🏮 {display_name} joins — festival of flirty faces.",
-    "🫦 {display_name} entered — pouty lips and big eyes.",
-    "🎐 {display_name} arrives — wind chimes and winks.",
-    "🌟 {display_name} joined — glitter and glances.",
-    "🛸 {display_name} beamed down — alien waifu confirmed.",
-    "🌈 {display_name} arrives — color me smitten.",
-    "🍒 {display_name} showed up — cherry cheeks and smiles.",
-    "🪄 {display_name} joined — magic of a thousand blushes.",
-    "🧸 {display_name} enters — soft hugs and soft waifus.",
-    "💌 {display_name} arrived — a love letter in motion.",
-    "🔮 {display_name} joined — destiny's spicy twist.",
-    "🕊️ {display_name} appears — gentle flirts incoming.",
-    "📸 {display_name} walks in — strike a pose, darling.",
-    "🥳 {display_name} joined — confetti, smiles, and thigh-highs.",
-    "🧿 {display_name} arrived — protective charm, seductive grin.",
-    "🏖️ {display_name} joins — beach bikini and sun-kissed waifu.",
-    "🚀 {display_name} enters — lift off to flirt space.",
-    "🎶 {display_name} joined — soundtrack: heartbeat & blush.",
-    "🍯 {display_name} walks in — sticky-sweet charm detected.",
-    "🧁 {display_name} joined — sugar-coated shenanigans.",
-    "💎 {display_name} arrives — gem-bright and cheeky.",
-    "🩰 {display_name} joined — tutu twirls and coy winks.",
-    "🦄 {display_name} enters — magical waifu shimmer.",
-    "🌊 {display_name} arrives — waves of flirtation.",
-    "🍓 {display_name} joined — strawberry-sweet smiles.",
-    "🎈 {display_name} appears — balloon pop of attention.",
-    "🌿 {display_name} entered — herb-scented flirty breeze.",
-    "🧩 {display_name} joined — puzzlingly cute moves.",
-    "🧬 {display_name} arrived — genetically optimized charm.",
-    "🌓 {display_name} joins — half-moon, full tease.",
-    "📚 {display_name} enters — scholarly seduction.",
-    "🏵️ {display_name} arrived — floral blush and mischief.",
-    "🛁 {display_name} joined — steam, suds, and soft glances.",
-    "🧨 {display_name} appears — explosive cuteness.",
-    "🦋 {display_name} joined — fluttering lashes and coy smiles.",
-    "🥀 {display_name} enters — rosy petals and low-key spice.",
-    "🍫 {display_name} arrived — chocolatey charm unlocked.",
-    "🍷 {display_name} joined — sip, smile, sway.",
-    "🪙 {display_name} appears — a coin-flip of choices: flirt or tease?",
-    "🧭 {display_name} arrived — compass points to cute.",
-    "🪴 {display_name} joined — potted waifu energy.",
-    "🗝️ {display_name} enters — key to your heart (maybe!).",
-    "🛍️ {display_name} arrived — shopping bags full of sass.",
-    "🧶 {display_name} joins — knitted charm and warm hugs.",
-    "🧥 {display_name} entered — coat-swathe and smolder.",
-    "🩸 {display_name} joined — whisper of dramatic flair.",
-    "🪞 {display_name} appears — reflection looks better today.",
-    "🖤 {display_name} arrived — mysterious and alluring.",
-    "💐 {display_name} joined — a bouquet of winks.",
-    "🍀 {display_name} enters — lucky charm energy.",
-    "🛹 {display_name} arrived — skater flip and flirt.",
-    "🛼 {display_name} joins — roller-disco tease.",
-    "🕶️ {display_name} entered — sunglasses, smiles, sass.",
-    "📯 {display_name} arrived — the trumpets of attention!",
-    "🔔 {display_name} joined — ding-ding! look here!",
-    "🎤 {display_name} enters — sing, sway, seduce.",
-    "⛩️ {display_name} joined — torii gate to waifu heaven.",
-    "🏮 {display_name} appears — lantern-lit flirtation.",
-    "🧚 {display_name} joined — fairy winks and mischief.",
-    "🌸 {display_name} steps in — blossom & blush combo.",
-    "😽 {display_name} joined — cat-like charm engaged.",
-    "🥂 {display_name} arrived — cheers to cheeky times.",
-    "🩰 {display_name} steps in — ballet blush style.",
-    "🧋 {display_name} walked in — boba and flirty vibes.",
-    "🪄 {display_name} arrived — spellbound cuteness."
-]
-# ensure at least 100
-while len(JOIN_GREETINGS) < 100:
-    JOIN_GREETINGS.append(random.choice(JOIN_GREETINGS).replace(" joined"," arrived"))
-
-LEAVE_GREETINGS = [
-    "🌙 {display_name} drifts away — the moon hushes a little.",
-    "🍃 {display_name} fades out — petals fall where they once stood.",
-    "💫 {display_name} slips away — stardust in their wake.",
-    "🥀 {display_name} leaves — a blush left behind.",
-    "🫶 {display_name} departed — hands empty, hearts full.",
-    "🪄 {display_name} vanished — the magic took them home.",
-    "🍯 {display_name} left — sticky-sweet memories remain.",
-    "🧸 {display_name} walked off — soft hugs lost a bearer.",
-    "🫠 {display_name} logged off — meltdown of cuteness over.",
-    "🎴 {display_name} leaves — fortune says 'see you soon'.",
-    "🎈 {display_name} floated away — pop! gone.",
-    "🚀 {display_name} took off — orbiting elsewhere now.",
-    "🏖️ {display_name} left — headed to sunny shores.",
-    "🍓 {display_name} walked off — strawberry smiles left behind.",
-    "🎀 {display_name} departs — ribbon untied, wink kept.",
-    "🪩 {display_name} left — disco lights dim a bit.",
-    "🌺 {display_name} leaves — trail of petals.",
-    "🦊 {display_name} slinked away — fox-like mystery continues.",
-    "🕊️ {display_name} flew off — gentle and graceful.",
-    "📸 {display_name} left — last snapshot captured the grin.",
-    "🧁 {display_name} dipped out — frosting still warm.",
-    "🔮 {display_name} vanished — fate will meet again.",
-    "🪞 {display_name} walked away — mirror shows a smile.",
-    "🍷 {display_name} left — glass half-empty of flirtation.",
-    "🧭 {display_name} left — compass points elsewhere.",
-    "🧶 {display_name} departed — yarn untangles softly.",
-    "🩰 {display_name} leaves — tutus and goodbyes.",
-    "🛁 {display_name} left — steam cleared the room.",
-    "🦄 {display_name} galloped off — mythical and missed.",
-    "📚 {display_name} left — story paused mid-page.",
-    "🍫 {display_name} faded — cocoa-sweet exit.",
-    "🫦 {display_name} stepped away — pout still in the air.",
-    "🌊 {display_name} drifted off — tide took them.",
-    "🎶 {display_name} left — song fades but hum remains.",
-    "🧿 {display_name} departed — charm still glowing.",
-    "🏮 {display_name} left — lanterns dim.",
-    "🪴 {display_name} stepped away — potted bliss remains.",
-    "🗝️ {display_name} left — key placed down gently.",
-    "⛩️ {display_name} left the shrine — prayers kept.",
-    "🧚 {display_name} fluttered away — fairy dust lingers.",
-    "🖤 {display_name} left — mysterious silence follows.",
-    "🌿 {display_name} departed — green hush in the air.",
-    "🛍️ {display_name} left — bags full of mischief.",
-    "📯 {display_name} rode off — trumpet call dwindles.",
-    "🪙 {display_name} vanished — luck rolls onward.",
-    "🪄 {display_name} left — spell undone.",
-    "😽 {display_name} slipped away — catlike grace retained.",
-    "🎯 {display_name} left — target missed this time.",
-    "🥂 {display_name} left — toast to next time.",
-    "🧥 {display_name} left — coat taken, glances kept.",
-    "🛹 {display_name} skated off — kickflip and goodbye.",
-    "🛼 {display_name} rolled away — rollerbeats fade.",
-    "🕶️ {display_name} left — shades down and gone.",
-    "🔔 {display_name} departed — bell tolls faintly.",
-    "📸 {display_name} left — last frame a smirk.",
-    "🪙 {display_name} left — coin flicked into the void.",
-    "🧩 {display_name} walked off — puzzle missing a piece.",
-    "𪞞 {display_name} left — reflection smiles alone.",
-    "🌸 {display_name} drifted away — petals to the wind.",
-    "💌 {display_name} left — letter sealed and mailed.",
-    "🏵️ {display_name} departed — floral farewell.",
-    "🧿 {display_name} left — charm still hums softly.",
-    "🧋 {display_name} left — last bubble popped.",
-    "🍒 {display_name} left — cherries still on the plate.",
-    "🍡 {display_name} walked away — dango leftover.",
-    "🧨 {display_name} vanished — sparkles died down.",
-    "🛏️ {display_name} left — nap time continues elsewhere.",
-    "𪪶 {display_name} left — feather trails behind.",
-    "🛸 {display_name} left — alien waifu gone."
-]
-
 while len(LEAVE_GREETINGS) < 100:
     LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
 
@@ -1131,8 +869,7 @@ while len(LEAVE_GREETINGS) < 100:
 # -------------------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.purple() if kind == "join" else discord.Color.dark_gray()
-    # Fixed deprecated utcnow()
-    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.now(timezone.utc))
+    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
@@ -1155,155 +892,131 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     autosave_task.start()
     logger.info(f"✅ Logged in as {bot.user} (id={bot.user.id})")
-    for guild in bot.guilds:
-        for ch in guild.voice_channels:
-            if ch.id in VC_IDS:
-                logger.info(f"VC id matched: {ch.id} -> {guild.name}/{ch.name}")
 
 @bot.event
 async def on_voice_state_update(member, before, after):
+    # ignore bots
     if member.bot:
         return
+
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # JOIN
+    # 1) Voice join behavior (bot joins VC when monitored user joins)
+    joined_monitored = False
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
-        try:
-            guild = member.guild
-            bot_member = guild.me or (await guild.fetch_member(bot.user.id))
-            try:
-                perms = after.channel.permissions_for(bot_member)
-                can_view = perms.view_channel
-                can_connect = perms.connect
-                can_speak = perms.speak
-            except Exception:
-                logger.exception("Channel permission check failed; falling back to guild permissions")
-                gp = bot_member.guild_permissions
-                can_view = gp.view_channel
-                can_connect = gp.connect
-                can_speak = gp.speak
-
-            if not can_view or not can_connect:
-                logger.warning(f"Bot lacks permissions for VC {after.channel.id} (view={can_view}, connect={can_connect}, speak={can_speak})")
-            else:
-                voice_client = discord.utils.get(bot.voice_clients, guild=guild)
-                if voice_client:
-                    if voice_client.channel.id != after.channel.id:
-                        try:
-                            logger.info(f"Moving bot from {voice_client.channel.id} to {after.channel.id}")
-                            await voice_client.move_to(after.channel)
-                            logger.info("Move succeeded")
-                        except Exception as e:
-                            logger.exception(f"Failed to move voice client: {e}")
-                    else:
-                        logger.info("Bot already connected to target VC")
-                else:
-                    try:
-                        logger.info(f"Connecting bot to VC {after.channel.id}")
-                        await after.channel.connect()
-                        logger.info("Connect succeeded")
-                    except Exception as e:
-                        logger.exception(f"Failed to connect to VC: {e}")
-        except Exception as e:
-            logger.exception(f"VC join logic error: {e}")
-
-        # send welcome embed + gif
-        try:
-            raw_msg = random.choice(JOIN_GREETINGS)
-            msg = raw_msg.format(display_name=member.display_name)
-            data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
-            try:
-                with open(DATA_FILE, "w") as f:
-                    json.dump(data, f, indent=2)
-            except Exception:
-                pass
-            embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
-            gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-            if gif_bytes:
-                try:
-                    file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                    embed.set_image(url=f"attachment://{gif_name}")
-                    if text_channel:
-                        await text_channel.send(embed=embed, file=file_server)
-                    try:
-                        file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                        await member.send(embed=embed, file=file_dm)
-                    except Exception:
-                        try:
-                            embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
-                            if gif_url:
-                                embed_dm.description += f"\n[View media here]({gif_url})"
-                            await member.send(embed=embed_dm)
-                        except Exception:
-                            logger.warning(f"Failed to DM {member.display_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to send join file: {e}")
-                    if text_channel:
-                        await text_channel.send(embed=embed)
-                    try:
-                        await member.send(embed=embed)
-                    except Exception:
-                        logger.warning(f"Failed to DM {member.display_name}")
-            else:
-                if text_channel:
-                    await text_channel.send(embed=embed)
-                try:
-                    await member.send(embed=embed)
-                except Exception:
-                    logger.warning(f"Failed to DM {member.display_name}")
-        except Exception:
-            logger.exception("Failed to send welcome embed/gif")
-
-    # LEAVE
-    if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
-        try:
-            raw_msg = random.choice(LEAVE_GREETINGS)
-            msg = raw_msg.format(display_name=member.display_name)
-            embed = make_embed("Goodbye!", msg, member, "leave")
-            gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-            if gif_bytes:
-                try:
-                    file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                    embed.set_image(url=f"attachment://{gif_name}")
-                    if text_channel:
-                        await text_channel.send(embed=embed, file=file_server)
-                    try:
-                        file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                        await member.send(embed=embed, file=file_dm)
-                    except Exception:
-                        try:
-                            embed_dm = make_embed("Goodbye!", msg, member, "leave")
-                            if gif_url:
-                                embed_dm.description += f"\n[View media here]({gif_url})"
-                            await member.send(embed=embed_dm)
-                        except Exception:
-                            logger.warning(f"Failed to DM {member.display_name}")
-                except Exception as e:
-                    logger.warning(f"Failed to send leave file: {e}")
-                    if text_channel:
-                        await text_channel.send(embed=embed)
-                    try:
-                        await member.send(embed=embed)
-                    except Exception:
-                        logger.warning(f"Failed to DM {member.display_name}")
-            else:
-                if text_channel:
-                    await text_channel.send(embed=embed)
-                try:
-                    await member.send(embed=embed)
-                except Exception:
-                    logger.warning(f"Failed to DM {member.display_name}")
-        except Exception:
-            logger.exception("Failed to send leave embed/gif")
-
-        # disconnect when alone
+        # A user joined one of the monitored voice channels
+        joined_monitored = True
         try:
             voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
             if voice_client:
+                # if bot is in a different channel, move to this one
+                if voice_client.channel.id != after.channel.id:
+                    try:
+                        await voice_client.move_to(after.channel)
+                    except Exception as e:
+                        logger.warning(f"Failed to move voice client: {e}")
+            else:
+                try:
+                    await after.channel.connect()
+                except Exception as e:
+                    logger.warning(f"Failed to connect to channel: {e}")
+        except Exception as e:
+            logger.warning(f"VC join logic error: {e}")
+
+    # 2) Run existing welcome/goodbye flows when monitored channels trigger (send GIFs and embeds)
+    # JOIN message/gif
+    if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
+        raw_msg = random.choice(JOIN_GREETINGS)
+        msg = raw_msg.format(display_name=member.display_name)
+        data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
+        try:
+            with open(DATA_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+        embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
+        gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
+        if gif_bytes:
+            try:
+                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                embed.set_image(url=f"attachment://{gif_name}")
+                if text_channel:
+                    await text_channel.send(embed=embed, file=file_server)
+                try:
+                    file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                    await member.send(embed=embed, file=file_dm)
+                except Exception:
+                    try:
+                        embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
+                        if gif_url:
+                            embed_dm.description += f"\n[View media here]({gif_url})"
+                        await member.send(embed=embed_dm)
+                    except Exception:
+                        logger.warning(f"Failed to DM {member.display_name}")
+            except Exception as e:
+                logger.warning(f"Failed to send join file: {e}")
+                if text_channel:
+                    await text_channel.send(embed=embed)
+                try:
+                    await member.send(embed=embed)
+                except Exception:
+                    logger.warning(f"Failed to DM {member.display_name}")
+        else:
+            if text_channel:
+                await text_channel.send(embed=embed)
+            try:
+                await member.send(embed=embed)
+            except Exception:
+                logger.warning(f"Failed to DM {member.display_name}")
+
+    # LEAVE message/gif and potential disconnect behavior
+    if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
+        raw_msg = random.choice(LEAVE_GREETINGS)
+        msg = raw_msg.format(display_name=member.display_name)
+        embed = make_embed("Goodbye!", msg, member, "leave")
+        gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
+        if gif_bytes:
+            try:
+                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                embed.set_image(url=f"attachment://{gif_name}")
+                if text_channel:
+                    await text_channel.send(embed=embed, file=file_server)
+                try:
+                    file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                    await member.send(embed=embed, file=file_dm)
+                except Exception:
+                    try:
+                        embed_dm = make_embed("Goodbye!", msg, member, "leave")
+                        if gif_url:
+                            embed_dm.description += f"\n[View media here]({gif_url})"
+                        await member.send(embed=embed_dm)
+                    except Exception:
+                        logger.warning(f"Failed to DM {member.display_name}")
+            except Exception as e:
+                logger.warning(f"Failed to send leave file: {e}")
+                if text_channel:
+                    await text_channel.send(embed=embed)
+                try:
+                    await member.send(embed=embed)
+                except Exception:
+                    logger.warning(f"Failed to DM {member.display_name}")
+        else:
+            if text_channel:
+                await text_channel.send(embed=embed)
+            try:
+                await member.send(embed=embed)
+            except Exception:
+                logger.warning(f"Failed to DM {member.display_name}")
+
+        # After sending the leave embed, check if bot should disconnect
+        try:
+            voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
+            if voice_client:
+                # Count non-bot members in voice_client.channel
                 non_bot_members = [m for m in voice_client.channel.members if not m.bot]
                 if len(non_bot_members) == 0:
+                    # bot is alone — disconnect
                     try:
-                        logger.info("Bot is alone in VC; disconnecting.")
                         await voice_client.disconnect()
                     except Exception as e:
                         logger.warning(f"Failed to disconnect voice client: {e}")
@@ -1311,14 +1024,13 @@ async def on_voice_state_update(member, before, after):
             logger.warning(f"VC disconnect logic error: {e}")
 
 # -------------------------
-# Admin commands
+# Owner/admin commands
 # -------------------------
 @bot.command(name="testgif")
+@commands.is_owner()
 async def testgif(ctx):
-    if not is_admin(ctx.author):
-        await ctx.send("You are not authorized to use this command.")
-        return
-    await ctx.send("Fetching test GIF...")
+    """Owner-only: fetch and post a test gif."""
+    await ctx.defer()
     gif_bytes, gif_name, gif_url = await fetch_gif(ctx.author.id)
     if gif_bytes:
         try:
@@ -1332,10 +1044,9 @@ async def testgif(ctx):
     await ctx.send("Couldn't fetch a test GIF right now. Try again later.")
 
 @bot.command(name="setweight")
+@commands.is_owner()
 async def setweight(ctx, provider: str, weight: int):
-    if not is_admin(ctx.author):
-        await ctx.send("You are not authorized to use this command.")
-        return
+    """Owner-only: set provider weight at runtime (0 disables)."""
     provider = provider.strip().lower()
     if provider not in default_weights and provider not in PROVIDER_FETCHERS:
         await ctx.send(f"Unknown provider `{provider}`. Known: {', '.join(sorted(PROVIDER_FETCHERS.keys()))}")
@@ -1345,10 +1056,8 @@ async def setweight(ctx, provider: str, weight: int):
     await ctx.send(f"Set weight for {provider} = {weight}")
 
 @bot.command(name="weights")
+@commands.is_owner()
 async def showweights(ctx):
-    if not is_admin(ctx.author):
-        await ctx.send("You are not authorized to use this command.")
-        return
     lines = [f"{p}: {w}" for p, w in data["provider_weights"].items()]
     await ctx.send("Provider weights:\n" + "\n".join(lines))
 
