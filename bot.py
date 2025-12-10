@@ -51,6 +51,10 @@ FETCH_ATTEMPTS = 60                 # attempts per fetch cycle
 # -------------------------
 # Spicy tag pool (extended) - MASTER TAGS. The master randomizer uses these tags.
 # -------------------------
+# -------------------------
+# GIF TAGS (your full list, corrected)
+# -------------------------
+# -------------------------
 GIF_TAGS = [
     # core spicy
     "busty","big breasts","oppai","busty anime","huge breasts","big boobs",
@@ -68,13 +72,22 @@ GIF_TAGS = [
     "anime tease","anime flirt","soft erotic","suggestive pose","playful tease",
     "side profile cleavage","hip sway","shimmy","dance tease",
     "bouncy","nip slip","peekaboo","portrait cleavage",
-    # extras to diversify queries
+
+    # extras
     "oppai focus","underboob tease","thighs focus","panties peek",
-    "mature waifu","older sister waifu","maid outfit","cute cosplay","lingerie model"
+    "mature waifu","older sister waifu","maid outfit","cute cosplay","lingerie model",
+
+    # extra separate tags
+    "oppai","big boobs","boobs","busty","huge breasts","busty anime",
+    "ass","jiggle","bounce","milf","mommy","mature","underboob",
+    "lingerie","lingerie girl","sensual","teasing","ecchi","lewd",
+    "seductive","sexy","fanservice","cleavage","swimsuit","bikini",
+    "cosplay","stockings","thighs","thick","booty","thighfocus",
+    "underwear","pantie"
 ]
 
 # -------------------------
-# Providers (safe + added curated ones)
+# Providers
 # -------------------------
 PROVIDERS = [
     "waifu_pics",
@@ -99,55 +112,71 @@ USE_TENOR = bool(TENOR_API_KEY)
 USE_GIPHY = bool(GIPHY_API_KEY)
 
 # -------------------------
-# Moderation lists (Option A) - EXPANDED HARD TAGS to aggressively block gay/MALE/TRANS/FEMBOY/TRAP variants.
-# HARD_TAGS = immediate block (1 match)
-# SOFT_TAGS = block if 3+ matches
+# HARD BLOCK TAGS (explicit + added underboob/sideboob)
 # -------------------------
 HARD_TAGS = [
-    # anatomy/genitals (already explicit)
+    # anatomy/genitals
     "pussy","vagina","labia","clitoris",
     "penis","cock","dick","shaft","testicles","balls","scrotum","anus",
     "open pussy","spread pussy","uncensored pussy",
-    # explicit visible nudity
-    "bare breasts","nipples visible","areola visible","nipples out","nipple visible",
-    "nude female","naked female","explicit nude","spread legs explicit",
+
+    # nudity
+    "bare breasts","nude","naked","topless","bottomless",
+    "nipples","nipple","areola","areolas","areola visible","nipples visible",
+    "nipples out","nipple visible","nude female","naked female",
+    "explicit nude","spread legs explicit","underboob","sideboob",
+
     # sexual acts
-    "sex","penetration","penetrating","penetrated","anal sex","double penetration","dp",
+    "sex","penetration","penetrating","penetrated",
+    "anal sex","double penetration","dp",
     "threesome","foursome","group sex","orgy","69",
     "blowjob","deepthroat","oral","fellatio","handjob","titty fuck",
     "facefuck","facesitting","creampie","facial",
-    # ejaculate / cum
+
+    # cum/ejaculate
     "cum","cumshot","cum shot","ejac","ejaculation",
-    "cum in mouth","cum in face","cum_on_face","cum_in_mouth","cum covered","cum drip",
-    # porn/explicit
+    "cum in mouth","cum in face","cum_on_face","cum_in_mouth",
+    "cum covered","cum drip",
+
+    # porn
     "porn","pornography","xxx","explicit","uncensored","hentai explicit","hentai uncensored",
-    # extreme / illegal
+
+    # extreme/illegal
     "bestiality","scat","watersports","fisting","sex toy","strapon",
-    # ----- NEW: Aggressive gay / male / trans / trap / femboy blocking -----
-    "gay","homosexual","gay male","gay male porn","gay porn","gaysex","gay-sex",
-    "man","men","male","males","boy","boys","young man","young man",
-    "shemale","shemales","shemale porn","trap","traps","femboy","femboys","femboy porn",
-    "trans","transgender","transsexual","mtf","ftm","crossdresser","cross-dresser",
-    "male nudity","male breasts","dickgirl","dick-girl","futa","futanari",
-    "sissy","sissy porn","beard","male nipples"
+
+    # gender/aggressive
+    "gay","homosexual","gay male","gay porn","gaysex","man","men","male","males",
+    "boy","boys","young man",
+    "shemale","shemales","trap","traps","femboy","femboys",
+    "trans","transgender","transsexual","mtf","ftm","crossdresser",
+    "male nudity","male breasts","futa","futanari","sissy","dickgirl"
 ]
 
+# -------------------------
+# SOFT BLOCK TAGS (safe from hard, borderline suggestive)
+# -------------------------
 SOFT_TAGS = [
-    "nude","naked","topless","bottomless",
-    "nipples","areola","lingerie","lingerie girl",
-    "erotic","ecchi","sensual","lewd","teasing",
-    "big boobs","boobs","oppai","busty","huge breasts","busty anime",
-    "ass","booty","thick","thighs","thighfocus","jiggle","bounce",
-    "milf","mommy","mature","seductive","sexy","fanservice",
-    "cleavage","swimsuit","bikini","underwear","cosplay","panties","stockings",
-    "underboob","sideboob","nip slip"
+    "stockings",
+    "teasing",
+    "sexy",
+    "lewd",
+    "soft erotic",
+    "suggestive",
+    "suggestive pose"
 ]
 
-# Quick filename/url block keywords (pre-download)
+# -------------------------
+# Filename/url block
+# -------------------------
 FILENAME_BLOCK_KEYWORDS = [
-    "cum", "pussy", "nude", "naked", "penis", "cock", "vagina",
-    "explicit", "uncensored", "xxx", "hentai", "orgy", "creampie",
-    "facial", "scat", "fisting", "bestiality"
+    "orgy", "creampie", "facial", "scat", "fisting", "bestiality"
+]
+
+# -------------------------
+# Filename/url block
+# -------------------------
+FILENAME_BLOCK_KEYWORDS = [
+    "orgy", "creampie", "facial", "scat", "fisting", "bestiality"
 ]
 
 # Exclude underage / illegal tags if provider returns tags
