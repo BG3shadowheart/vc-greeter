@@ -37,13 +37,13 @@ DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 # Your VC IDs and text channel
 # -------------------------
 VC_IDS = [
-    1430122700525010997,
+    1353875050809524267,
     1353875404217253909,
     1353882705246556220
 ]
 
 # This must be a TEXT channel ID where the bot sends the welcome image
-VC_CHANNAL_ID = 1446752109151260792
+TEXT_CHANNAL_ID = 1446752109151260792
 
 # -------------------------
 # Files & limits
