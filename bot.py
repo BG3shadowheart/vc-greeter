@@ -1,16 +1,11 @@
 # bot_spiciest_final_v3_with_vcjoin.py
 # Final safe-spicy anime welcome bot v3 (voice-join enabled)
-# - 15+ safe anime providers (no booru/porn)
-# - Option A nudity rules (HARD always block, SOFT block if 3+ matches)
-# - Random provider + random tag each request
-# - Per-user no-repeat history (stored in data.json)
-# - 100+ spicy join & leave greetings
-# - Admin commands: testgif, setweight, weights (gated by ADMINS/ADMIN_ROLE_NAME)
-# - Bot will JOIN the VC when a user joins a monitored VC and LEAVE when it's alone
+# Includes fused visual moderation (Google Vision + DeepAI + textual heuristics).
 #
 # ENV:
 # TOKEN (required)
 # TENOR_API_KEY, GIPHY_API_KEY, WAIFUIM_API_KEY, WAIFUIT_API_KEY, FLUXPOINT_API_KEY (optional)
+# Optional: GOOGLE_APPLICATION_CREDENTIALS (path to service-account.json) and DEEPAI_KEY
 #
 # Run: python bot_spiciest_final_v3_with_vcjoin.py
 
@@ -28,6 +23,14 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+# Visual moderation external libs
+import requests
+try:
+    from google.cloud import vision
+    vision_client = vision.ImageAnnotatorClient()
+except Exception:
+    vision_client = None
+
 # -------------------------
 # Environment / keys
 # -------------------------
@@ -37,6 +40,7 @@ GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 WAIFUIM_API_KEY = os.getenv("WAIFUIM_API_KEY")
 WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")
 FLUXPOINT_API_KEY = os.getenv("FLUXPOINT_API_KEY")
+DEEPAI_KEY = os.getenv("DEEPAI_KEY")  # optional DeepAI key
 DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
 
 # -------------------------
@@ -61,9 +65,8 @@ FETCH_ATTEMPTS = 60                 # attempts per fetch cycle
 # -------------------------
 # Admin config (no owner commands)
 # -------------------------
-# List admin Discord IDs here (ints) OR set ADMIN_ROLE_NAME to a role that grants admin privileges.
 ADMINS = [
-    # 123456789012345678,
+    # put admin user IDs here as integers, e.g. 123456789012345678
 ]
 ADMIN_ROLE_NAME = "BotAdmin"  # set to None to disable role-role admin
 
@@ -85,7 +88,6 @@ def is_admin(member: discord.Member) -> bool:
 # Spicy tag pool (extended)
 # -------------------------
 GIF_TAGS = [
-    # core spicy
     "busty","big breasts","oppai","busty anime","huge breasts","big boobs",
     "milf","mommy","mature","mature anime","older waifu","mommy waifu",
     "thick","thicc","thick thighs","thighs","thighfocus","anime thick thighs",
@@ -101,7 +103,6 @@ GIF_TAGS = [
     "anime tease","anime flirt","soft erotic","suggestive pose","playful tease",
     "side profile cleavage","hip sway","shimmy","dance tease",
     "bouncy","nip slip","peekaboo","portrait cleavage",
-    # extras to diversify queries
     "oppai focus","underboob tease","thighs focus","panties peek",
     "mature waifu","older sister waifu","maid outfit","cute cosplay","lingerie model"
 ]
@@ -133,40 +134,30 @@ USE_GIPHY = bool(GIPHY_API_KEY)
 
 # -------------------------
 # Moderation lists (Option A)
-# HARD_TAGS = immediate block (1 match)
-# SOFT_TAGS = block if 3+ matches
 # -------------------------
 HARD_TAGS = [
     "pussy","vagina","labia","clitoris",
     "penis","cock","dick","shaft","testicles","balls","scrotum","anus",
     "open pussy","spread pussy","uncensored pussy",
-
     "bare breasts","nipples visible","areola visible","nipples out","nipple visible",
     "nude female","naked female","explicit nude","spread legs explicit",
-
     "sex","penetration","penetrating","penetrated","anal sex","anal penetration",
     "double penetration","dp","threesome","foursome","group sex",
     "orgy","gangbang","69","blowjob","deepthroat","oral","fellatio",
     "handjob","titty fuck","facefuck","facesitting","creampie","facial",
-
     "cum","cumshot","cum shot","ejac","ejaculation",
     "cum in mouth","cum in face","cum_on_face","cum_in_mouth",
     "cum covered","cum drip",
-
     "porn","pornography","xxx","explicit","uncensored",
     "hentai explicit","hentai uncensored",
-
     "bestiality","scat","watersports","fisting","sex toy","strapon",
-
     "futa","futanari","futanary",
     "hentai","nsfw","shemale","trap",
     "loli","shota","underage","minor","incest",
     "vore","bdsm","daddy",
     "father","mother","rape","yuri",
-    
     "gay porn","gay hentai","trans porn","trans hentai",
     "futa hentai","futa porn",
-
     "male male","male x male","male×male","m/m","m x m",
     "male love","male romance","male cuddling",
     "male kissing","male kiss","boy kiss","boys kissing",
@@ -177,13 +168,10 @@ HARD_TAGS = [
     "male flirting","male touching","gay touch","gay scene",
     "gay moment","male couple","bl scene","bl couple",
     "gay anime couple","gay anime kiss","boy x boy",
-
-    # Newly added unique tags
     "dross","2boys","blush","brown hair","duo",
     "elf","elf ears","elf male","femboy","functionally nude",
     "green eyes","light-skinned male","thighhighs","twink", "blowjob"
 ]
-
 
 SOFT_TAGS = [
     "nude","naked","topless","bottomless",
@@ -196,16 +184,13 @@ SOFT_TAGS = [
     "underboob","sideboob","nip slip"
 ]
 
-# Quick filename/url block keywords (pre-download)
 FILENAME_BLOCK_KEYWORDS = [
     "cum", "pussy", "nude", "naked", "penis", "cock", "vagina",
     "explicit", "uncensored", "xxx", "hentai", "orgy", "creampie",
     "facial", "scat", "fisting", "bestiality",
-    # also include trap/shemale/etc here defensively
     "trap", "shemale", "femboy", "yaoi", "twink", "2boys", "gay"
 ]
 
-# Exclude underage / illegal tags if provider returns tags
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
 # -------------------------
@@ -279,9 +264,9 @@ with open(DATA_FILE, "r") as f:
 data.setdefault("join_counts", {})
 data.setdefault("used_gifs", {})
 data.setdefault("provider_weights", {})
-data.setdefault("sent_history", {})  # per-user set of gif hashes/urls to avoid repeats
+data.setdefault("sent_history", {})
 
-# default provider weights (you can tweak at runtime)
+# default provider weights
 default_weights = {
     "waifu_pics": 12,
     "waifu_im": 10,
@@ -324,7 +309,6 @@ def build_provider_pool():
         if weight <= 0:
             continue
         pool.extend([prov] * max(1, int(weight)))
-    # ensure tenor/giphy presence if keys provided
     if USE_TENOR and "tenor" not in pool:
         pool.extend(["tenor"] * 3)
     if USE_GIPHY and "giphy" not in pool:
@@ -333,10 +317,89 @@ def build_provider_pool():
     return pool
 
 # -------------------------
+# Visual moderation helpers (fusion)
+# -------------------------
+_VISION_LEVELS = {
+    'UNKNOWN': 0,
+    'VERY_UNLIKELY': 1,
+    'UNLIKELY': 2,
+    'POSSIBLE': 3,
+    'LIKELY': 4,
+    'VERY_LIKELY': 5
+}
+
+def _vision_safe_search_levels(image_bytes: bytes):
+    """Return (adult_level, racy_level) as integers (0-5). If client unavailable, return (None,None)."""
+    if not vision_client:
+        return None, None
+    try:
+        image = vision.Image(content=image_bytes)
+        resp = vision_client.safe_search_detection(image=image)
+        ann = resp.safe_search_annotation
+        adult = _VISION_LEVELS.get(getattr(ann.adult, "name", "UNKNOWN"), 0)
+        racy  = _VISION_LEVELS.get(getattr(ann.racy, "name", "UNKNOWN"), 0)
+        return adult, racy
+    except Exception:
+        return None, None
+
+def _deepai_nsfw_score(image_bytes: bytes, timeout=15):
+    """Return numeric score 0..1 if available, else None. Uses DeepAI NSFW detector."""
+    if not DEEPAI_KEY:
+        return None
+    try:
+        r = requests.post(
+            "https://api.deepai.org/api/nsfw-detector",
+            files={'image': ('image.jpg', image_bytes)},
+            headers={'api-key': DEEPAI_KEY},
+            timeout=timeout
+        )
+        j = r.json()
+        score = None
+        if isinstance(j, dict):
+            score = j.get('nsfw_score') or (j.get('output') or {}).get('nsfw_score')
+            if score is None:
+                det = (j.get('output') or {}).get('detections') or j.get('detections') or []
+                if isinstance(det, list) and det:
+                    confs = [d.get('confidence', 0.0) for d in det if isinstance(d, dict)]
+                    if confs:
+                        score = max(confs)
+        if score is None:
+            return None
+        return float(score)
+    except Exception:
+        return None
+
+def _supporting_textual_signal(url_or_name: str, meta_text: str) -> bool:
+    """
+    True if textual metadata supports a block (i.e., has hard tags or >=3 soft tags).
+    """
+    try:
+        if filename_has_block_keyword(url_or_name):
+            return True
+        if contains_nude_indicators(url_or_name):
+            return True
+        if contains_nude_indicators(meta_text):
+            return True
+    except Exception:
+        pass
+    return False
+
+# -------------------------
 # Provider fetcher helpers (defensive)
 # Each fetcher returns (bytes, filename, source_url) or (None,None,None)
 # -------------------------
 async def _download_url(session, url, timeout=18):
+    """
+    Downloads bytes and runs a fused visual+text moderation.
+    Returns (bytes, content_type) or (None, None) if blocked/unavailable.
+    Decision logic:
+      - If Vision returns VERY_LIKELY for adult or racy: BLOCK.
+      - If Vision returns LIKELY: block only if supporting textual signals present.
+      - If Vision returns POSSIBLE: block only if strong textual signals present (e.g., HARD tag/filename).
+      - If DeepAI score >= 0.85: BLOCK.
+      - If DeepAI between 0.6-0.85: block only with supporting textual signal.
+      - Fallback textual-only checks (filename/meta).
+    """
     try:
         async with session.get(url, timeout=timeout) as resp:
             if resp.status != 200:
@@ -345,10 +408,54 @@ async def _download_url(session, url, timeout=18):
             if "html" in ctype:
                 return None, None
             b = await resp.read()
+
+            # visual checks
+            adult_level, racy_level = _vision_safe_search_levels(b)  # may be (None,None)
+            deepai_score = _deepai_nsfw_score(b) if DEEPAI_KEY else None
+
+            # textual support from URL only (fetchers may also construct meta_text and re-check)
+            textual_signal = _supporting_textual_signal(url, "")
+
+            # Vision decisive block
+            if adult_level is not None:
+                if adult_level >= _VISION_LEVELS['VERY_LIKELY'] or racy_level >= _VISION_LEVELS['VERY_LIKELY']:
+                    logger.info(f"Visual block (vision VERY_LIKELY) for {url}")
+                    return None, None
+                if adult_level >= _VISION_LEVELS['LIKELY'] or racy_level >= _VISION_LEVELS['LIKELY']:
+                    if textual_signal:
+                        logger.info(f"Visual+text block (vision LIKELY + textual) for {url}")
+                        return None, None
+                if adult_level >= _VISION_LEVELS['POSSIBLE'] or racy_level >= _VISION_LEVELS['POSSIBLE']:
+                    if filename_has_block_keyword(url) or contains_nude_indicators(url):
+                        logger.info(f"Visual POSSIBLE + strong filename/meta -> block {url}")
+                        return None, None
+
+            # DeepAI signals
+            if deepai_score is not None:
+                if deepai_score >= 0.85:
+                    logger.info(f"DeepAI strong block (score {deepai_score:.2f}) for {url}")
+                    return None, None
+                if deepai_score >= 0.6:
+                    if textual_signal:
+                        logger.info(f"DeepAI {deepai_score:.2f} + textual -> block {url}")
+                        return None, None
+
+            # Fallback textual-only checks
+            if filename_has_block_keyword(url):
+                logger.info(f"Filename heuristic block for {url}")
+                return None, None
+            if contains_nude_indicators(url):
+                logger.info(f"URL heuristic nude-indicators block for {url}")
+                return None, None
+
+            # Passed fused checks — return bytes
             return b, ctype
-    except Exception:
+    except Exception as e:
+        logger.exception(f"_download_url error for {url}: {e}")
+        # Conservative: block when an unexpected error occurs to avoid returning unknown images.
         return None, None
 
+# (Provider fetchers follow — same as earlier; each uses _download_url and textual checks)
 # Provider: waifu.pics
 async def fetch_from_waifu_pics(session, positive):
     try:
@@ -479,7 +586,8 @@ async def fetch_from_nekos_life(session, positive):
             if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
+            if not b:
+                return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_life_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -532,7 +640,7 @@ async def fetch_from_nekos_api(session, positive):
         return None, None, None
     return None, None, None
 
-# Provider: nekos_moe (attempt)
+# Provider: nekos_moe
 async def fetch_from_nekos_moe(session, positive):
     try:
         url = "https://nekos.moe/api/v3/gif/random"
@@ -560,7 +668,7 @@ async def fetch_from_nekos_moe(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: nekoapi (attempt)
+# Provider: nekoapi
 async def fetch_from_nekoapi(session, positive):
     try:
         candidates = [
@@ -642,7 +750,7 @@ async def fetch_from_fluxpoint(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: generic alt waifu api (waifuapi_alt)
+# Provider: waifuapi_alt
 async def fetch_from_waifuapi_alt(session, positive):
     try:
         candidates = [
@@ -668,7 +776,7 @@ async def fetch_from_waifuapi_alt(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: latapi (attempt)
+# Provider: latapi
 async def fetch_from_latapi(session, positive):
     try:
         candidates = [
@@ -697,7 +805,7 @@ async def fetch_from_latapi(session, positive):
     except Exception:
         return None, None, None
 
-# Provider: animegirls_online (attempt)
+# Provider: animegirls_online
 async def fetch_from_animegirls_online(session, positive):
     try:
         candidates = [
@@ -811,7 +919,6 @@ async def fetch_from_giphy(session, positive):
     except Exception:
         return None, None, None
 
-# Map provider name -> function
 PROVIDER_FETCHERS = {
     "waifu_pics": fetch_from_waifu_pics,
     "waifu_im": fetch_from_waifu_im,
@@ -832,9 +939,6 @@ PROVIDER_FETCHERS = {
 
 # -------------------------
 # Master fetcher:
-# - random provider from weighted pool
-# - random tag
-# - avoids duplicates per user (using data["sent_history"])
 # -------------------------
 async def fetch_gif(user_id):
     user_key = str(user_id)
@@ -858,19 +962,14 @@ async def fetch_gif(user_id):
             b, name, gif_url = result
             if not gif_url:
                 continue
-            # final domain/filename check
             if filename_has_block_keyword(gif_url):
                 continue
             if contains_nude_indicators(gif_url):
                 continue
-            # compute stable id for gif_url
             gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
-            # avoid repeats to same user
             if gif_hash in sent:
                 continue
-            # store in history (append)
             sent.append(gif_hash)
-            # cap history size per user
             if len(sent) > MAX_USED_GIFS_PER_USER:
                 del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
             save_data()
@@ -878,7 +977,7 @@ async def fetch_gif(user_id):
     return None, None, None
 
 # -------------------------
-# 100+ join and leave greetings (spicy but not explicit)
+# Join/Leave greetings
 # -------------------------
 JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
@@ -970,7 +1069,6 @@ JOIN_GREETINGS = [
     "🧋 {display_name} walked in — boba and flirty vibes.",
     "🪄 {display_name} arrived — spellbound cuteness."
 ]
-# ensure at least 100
 while len(JOIN_GREETINGS) < 100:
     JOIN_GREETINGS.append(random.choice(JOIN_GREETINGS).replace(" joined"," arrived"))
 
@@ -1079,13 +1177,12 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # ignore bots
     if member.bot:
         return
 
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # 1) Voice join behavior (bot joins VC when monitored user joins)
+    # Voice join / join greetings + GIF
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         try:
             voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
@@ -1103,7 +1200,6 @@ async def on_voice_state_update(member, before, after):
         except Exception as e:
             logger.warning(f"VC join logic error: {e}")
 
-    # JOIN message/gif
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         raw_msg = random.choice(JOIN_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
@@ -1148,7 +1244,7 @@ async def on_voice_state_update(member, before, after):
             except Exception:
                 logger.warning(f"Failed to DM {member.display_name}")
 
-    # LEAVE message/gif and potential disconnect behavior
+    # Leave flow + GIF and potential disconnect
     if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
         raw_msg = random.choice(LEAVE_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
@@ -1187,7 +1283,7 @@ async def on_voice_state_update(member, before, after):
             except Exception:
                 logger.warning(f"Failed to DM {member.display_name}")
 
-        # After sending the leave embed, check if bot should disconnect
+        # disconnect if alone
         try:
             voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
             if voice_client:
@@ -1205,7 +1301,6 @@ async def on_voice_state_update(member, before, after):
 # -------------------------
 @bot.command(name="testgif")
 async def testgif(ctx):
-    """Admin-only: fetch and post a test gif."""
     if not is_admin(ctx.author):
         await ctx.send("You are not authorized to use this command.")
         return
@@ -1224,7 +1319,6 @@ async def testgif(ctx):
 
 @bot.command(name="setweight")
 async def setweight(ctx, provider: str, weight: int):
-    """Admin-only: set provider weight at runtime (0 disables)."""
     if not is_admin(ctx.author):
         await ctx.send("You are not authorized to use this command.")
         return
@@ -1238,7 +1332,6 @@ async def setweight(ctx, provider: str, weight: int):
 
 @bot.command(name="weights")
 async def showweights(ctx):
-    """Admin-only: show provider weights"""
     if not is_admin(ctx.author):
         await ctx.send("You are not authorized to use this command.")
         return
