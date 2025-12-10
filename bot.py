@@ -118,7 +118,7 @@ HARD_TAGS = [
     "shemale","shemales","shemale porn","trap","traps","femboy","femboys","femboy porn",
     "trans","transgender","transsexual","mtf","ftm","crossdresser","cross-dresser",
     "male nudity","male breasts","dickgirl","dick-girl","futa","futanari",
-    "sissy","sissy porn","beard","male nipples"
+    "sissy","sissy porn","beard", "oral hentai", "blowjob", "hentai", "male nipples"
 ]
 
 SOFT_TAGS = [
