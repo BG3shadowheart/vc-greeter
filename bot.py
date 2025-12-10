@@ -160,7 +160,7 @@ HARD_TAGS = [
     # Newly added unique tags
     "dross","2boys","blush","brown hair","duo",
     "elf","elf ears","elf male","femboy","functionally nude",
-    "green eyes","light-skinned male","thighhighs","twink"
+    "green eyes","light-skinned male","thighhighs","twink", "blowjob"
 ]
 
 
