@@ -5,7 +5,7 @@
 # - Random provider + random tag each request
 # - Per-user no-repeat history (stored in data.json)
 # - 100+ spicy join & leave greetings
-# - Owner commands: !testgif, !setweight, !weights
+# - Admin commands: testgif, setweight, weights (gated by ADMINS/ADMIN_ROLE_NAME)
 # - Bot will JOIN the VC when a user joins a monitored VC and LEAVE when it's alone
 #
 # ENV:
@@ -59,6 +59,29 @@ MAX_USED_GIFS_PER_USER = 1000       # memory cap per user
 FETCH_ATTEMPTS = 60                 # attempts per fetch cycle
 
 # -------------------------
+# Admin config (no owner commands)
+# -------------------------
+# List admin Discord IDs here (ints) OR set ADMIN_ROLE_NAME to a role that grants admin privileges.
+ADMINS = [
+    # 123456789012345678,
+]
+ADMIN_ROLE_NAME = "BotAdmin"  # set to None to disable role-role admin
+
+def is_admin(member: discord.Member) -> bool:
+    if not member:
+        return False
+    try:
+        if member.id in ADMINS:
+            return True
+        if ADMIN_ROLE_NAME:
+            for r in member.roles:
+                if r.name == ADMIN_ROLE_NAME:
+                    return True
+    except Exception:
+        pass
+    return False
+
+# -------------------------
 # Spicy tag pool (extended)
 # -------------------------
 GIF_TAGS = [
@@ -84,9 +107,7 @@ GIF_TAGS = [
 ]
 
 # -------------------------
-# Providers (safe + added curated ones)
-# - We won't include booru-style providers (rule34, danbooru, gelbooru, etc.)
-# - This list is intentionally broad; fetchers are defensive
+# Providers (safe + curated)
 # -------------------------
 PROVIDERS = [
     "waifu_pics",
@@ -179,7 +200,9 @@ SOFT_TAGS = [
 FILENAME_BLOCK_KEYWORDS = [
     "cum", "pussy", "nude", "naked", "penis", "cock", "vagina",
     "explicit", "uncensored", "xxx", "hentai", "orgy", "creampie",
-    "facial", "scat", "fisting", "bestiality"
+    "facial", "scat", "fisting", "bestiality",
+    # also include trap/shemale/etc here defensively
+    "trap", "shemale", "femboy", "yaoi", "twink", "2boys", "gay"
 ]
 
 # Exclude underage / illegal tags if provider returns tags
@@ -312,7 +335,6 @@ def build_provider_pool():
 # -------------------------
 # Provider fetcher helpers (defensive)
 # Each fetcher returns (bytes, filename, source_url) or (None,None,None)
-# We try to be robust: many endpoints are similar; if one fails, skip.
 # -------------------------
 async def _download_url(session, url, timeout=18):
     try:
@@ -433,7 +455,8 @@ async def fetch_from_nekos_best(session, positive):
             if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
                 return None, None, None
             b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
+            if not b:
+                return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_best_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -466,7 +489,6 @@ async def fetch_from_nekos_life(session, positive):
 # Provider: nekos_api / nekosapi sites (generic attempts)
 async def fetch_from_nekos_api(session, positive):
     try:
-        # try a few common endpoints flexibly
         candidates = [
             "https://v1.nekosapi.com/api/images/random",
             "https://nekos.moe/api/random",
@@ -480,9 +502,7 @@ async def fetch_from_nekos_api(session, positive):
                     if resp.status != 200:
                         continue
                     payload = await resp.json()
-                    # payload parsing variations
                     if isinstance(payload, dict):
-                        # find common fields
                         gif_url = payload.get("url") or payload.get("image") or payload.get("file") or payload.get("src")
                         if not gif_url and payload.get("data"):
                             d = payload.get("data")
@@ -520,7 +540,6 @@ async def fetch_from_nekos_moe(session, positive):
             if resp.status != 200:
                 return None, None, None
             payload = await resp.json()
-            # payload may have 'images' array
             gifs = payload.get("images") or payload.get("data") or []
             if isinstance(gifs, dict):
                 gifs = [gifs]
@@ -1067,14 +1086,10 @@ async def on_voice_state_update(member, before, after):
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
     # 1) Voice join behavior (bot joins VC when monitored user joins)
-    joined_monitored = False
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
-        # A user joined one of the monitored voice channels
-        joined_monitored = True
         try:
             voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
             if voice_client:
-                # if bot is in a different channel, move to this one
                 if voice_client.channel.id != after.channel.id:
                     try:
                         await voice_client.move_to(after.channel)
@@ -1088,7 +1103,6 @@ async def on_voice_state_update(member, before, after):
         except Exception as e:
             logger.warning(f"VC join logic error: {e}")
 
-    # 2) Run existing welcome/goodbye flows when monitored channels trigger (send GIFs and embeds)
     # JOIN message/gif
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         raw_msg = random.choice(JOIN_GREETINGS)
@@ -1177,10 +1191,8 @@ async def on_voice_state_update(member, before, after):
         try:
             voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
             if voice_client:
-                # Count non-bot members in voice_client.channel
                 non_bot_members = [m for m in voice_client.channel.members if not m.bot]
                 if len(non_bot_members) == 0:
-                    # bot is alone — disconnect
                     try:
                         await voice_client.disconnect()
                     except Exception as e:
@@ -1189,13 +1201,15 @@ async def on_voice_state_update(member, before, after):
             logger.warning(f"VC disconnect logic error: {e}")
 
 # -------------------------
-# Owner/admin commands
+# Admin commands (no owner decorators)
 # -------------------------
 @bot.command(name="testgif")
-@commands.is_owner()
 async def testgif(ctx):
-    """Owner-only: fetch and post a test gif."""
-    await ctx.defer()
+    """Admin-only: fetch and post a test gif."""
+    if not is_admin(ctx.author):
+        await ctx.send("You are not authorized to use this command.")
+        return
+    await ctx.send("Fetching test GIF...")
     gif_bytes, gif_name, gif_url = await fetch_gif(ctx.author.id)
     if gif_bytes:
         try:
@@ -1209,9 +1223,11 @@ async def testgif(ctx):
     await ctx.send("Couldn't fetch a test GIF right now. Try again later.")
 
 @bot.command(name="setweight")
-@commands.is_owner()
 async def setweight(ctx, provider: str, weight: int):
-    """Owner-only: set provider weight at runtime (0 disables)."""
+    """Admin-only: set provider weight at runtime (0 disables)."""
+    if not is_admin(ctx.author):
+        await ctx.send("You are not authorized to use this command.")
+        return
     provider = provider.strip().lower()
     if provider not in default_weights and provider not in PROVIDER_FETCHERS:
         await ctx.send(f"Unknown provider `{provider}`. Known: {', '.join(sorted(PROVIDER_FETCHERS.keys()))}")
@@ -1221,8 +1237,11 @@ async def setweight(ctx, provider: str, weight: int):
     await ctx.send(f"Set weight for {provider} = {weight}")
 
 @bot.command(name="weights")
-@commands.is_owner()
 async def showweights(ctx):
+    """Admin-only: show provider weights"""
+    if not is_admin(ctx.author):
+        await ctx.send("You are not authorized to use this command.")
+        return
     lines = [f"{p}: {w}" for p, w in data["provider_weights"].items()]
     await ctx.send("Provider weights:\n" + "\n".join(lines))
 
