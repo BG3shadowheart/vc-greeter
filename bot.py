@@ -116,48 +116,51 @@ USE_GIPHY = bool(GIPHY_API_KEY)
 # SOFT_TAGS = block if 3+ matches
 # -------------------------
 HARD_TAGS = [
-  "pussy","vagina","labia","clitoris",
-  "penis","cock","dick","shaft","testicles","balls","scrotum","anus",
-  "open pussy","spread pussy","uncensored pussy",
+    "pussy","vagina","labia","clitoris",
+    "penis","cock","dick","shaft","testicles","balls","scrotum","anus",
+    "open pussy","spread pussy","uncensored pussy",
 
-  "bare breasts","nipples visible","areola visible","nipples out","nipple visible",
-  "nude female","naked female","explicit nude","spread legs explicit",
+    "bare breasts","nipples visible","areola visible","nipples out","nipple visible",
+    "nude female","naked female","explicit nude","spread legs explicit",
 
-  "sex","penetration","penetrating","penetrated","anal sex",
-  "double penetration","dp","threesome","foursome","group sex",
-  "orgy","gangbang","69","blowjob","deepthroat","oral","fellatio",
-  "handjob","titty fuck","facefuck","facesitting","creampie","facial",
+    "sex","penetration","penetrating","penetrated","anal sex","anal penetration",
+    "double penetration","dp","threesome","foursome","group sex",
+    "orgy","gangbang","69","blowjob","deepthroat","oral","fellatio",
+    "handjob","titty fuck","facefuck","facesitting","creampie","facial",
 
-  "cum","cumshot","cum shot","ejac","ejaculation",
-  "cum in mouth","cum in face","cum_on_face","cum_in_mouth",
-  "cum covered","cum drip",
+    "cum","cumshot","cum shot","ejac","ejaculation",
+    "cum in mouth","cum in face","cum_on_face","cum_in_mouth",
+    "cum covered","cum drip",
 
-  "porn","pornography","xxx","explicit","uncensored",
-  "hentai explicit","hentai uncensored",
+    "porn","pornography","xxx","explicit","uncensored",
+    "hentai explicit","hentai uncensored",
 
-  "bestiality","scat","watersports","fisting","sex toy","strapon",
+    "bestiality","scat","watersports","fisting","sex toy","strapon",
 
-  "futa","futanari","futanary",
-  "hentai","nsfw","shemale","trap",
-  "loli","shota","underage","minor","incest",
-  "vore","bdsm","milf","mom","daddy",
-  "father","mother","rape","yaoi","yuri",
-  "anal","orgy","gangbang","nipples",
-  "pornographic",
+    "futa","futanari","futanary",
+    "hentai","nsfw","shemale","trap",
+    "loli","shota","underage","minor","incest",
+    "vore","bdsm","daddy",
+    "father","mother","rape","yuri",
+    
+    "gay porn","gay hentai","trans porn","trans hentai",
+    "futa hentai","futa porn",
 
-  "gay porn","gay hentai","trans porn","trans hentai",
-  "futa hentai","futa porn",
+    "male male","male x male","male×male","m/m","m x m",
+    "male love","male romance","male cuddling",
+    "male kissing","male kiss","boy kiss","boys kissing",
+    "gay kiss","gay kissing","gay cuddle","gay romantic",
+    "gay love","gay couple","boy love","bl","boys love",
+    "shounen ai","shonen ai","bl anime","bl kiss",
+    "male hug romantic","male hug intimate","gay hug",
+    "male flirting","male touching","gay touch","gay scene",
+    "gay moment","male couple","bl scene","bl couple",
+    "gay anime couple","gay anime kiss","boy x boy",
 
-  "male male","male x male","male×male","m/m","m x m",
-  "male love","male romance","male cuddling",
-  "male kissing","male kiss","boy kiss","boys kissing",
-  "gay kiss","gay kissing","gay cuddle","gay romantic",
-  "gay love","gay couple","boy love","bl","boys love",
-  "yaoi","shounen ai","shonen ai","bl anime","bl kiss",
-  "male hug romantic","male hug intimate","gay hug",
-  "male flirting","male touching","gay touch","gay scene",
-  "gay moment","male couple","bl scene","bl couple",
-  "gay anime couple","gay anime kiss","boy x boy"
+    # Newly added unique tags
+    "dross","2boys","blush","brown hair","duo",
+    "elf","elf ears","elf male","femboy","functionally nude",
+    "green eyes","light-skinned male","thighhighs","twink"
 ]
 
 
