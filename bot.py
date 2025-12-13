@@ -1,7 +1,8 @@
-# bot_spiciest_final_full_nsfw_expanded_terms_random_roundrobin.py
+# bot_spiciest_final_full_nsfw_expanded_terms_random_roundrobin_with_reliability.py
 # NSFW bot with expanded provider-specific spicy tag pools (20-30 each).
 # STILL blocks illegal content (minors, bestiality, sexual violence, etc.).
 # Env vars: TOKEN, TENOR_API_KEY (opt), GIPHY_API_KEY (opt), WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt)
+# Optional env vars: DEBUG_FETCH (true/1), DISCORD_MAX_UPLOAD (bytes, default 8MB)
 # Requirements: aiohttp, discord.py
 
 import os
@@ -40,6 +41,9 @@ AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 1000
 FETCH_ATTEMPTS = 30
 REQUEST_TIMEOUT = 14
+
+# Max size to attempt to upload to Discord (bytes). Default 8MB. Set DISCORD_MAX_UPLOAD env to change.
+DISCORD_MAX_UPLOAD = int(os.getenv("DISCORD_MAX_UPLOAD", str(8 * 1024 * 1024)))
 
 # -------- Provider fairness state (added) --------
 PROVIDER_CYCLE = []
@@ -154,12 +158,24 @@ async def autosave_task():
         logger.warning(f"Autosave failed: {e}")
 
 def save_data():
+    """
+    Save lightweight derived data (gif tags) — used by many earlier functions.
+    The main persistent write for sent_history is done inline where needed to avoid losing it.
+    """
     try:
         data["gif_tags"] = GIF_TAGS
         with open(DATA_FILE, "w") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
         logger.warning(f"Failed to save data: {e}")
+
+def persist_all_data():
+    """Write the whole data dict to disk (used after modifying sent_history)."""
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to persist all data: {e}")
 
 def add_tag_to_gif_tags(tag: str):
     if not tag or not isinstance(tag, str): return False
@@ -602,12 +618,77 @@ def build_provider_pool():
     random.shuffle(pool)
     return pool
 
+# ---------------- Reliability helper: send embed + media with robust fallback ----------------
+async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url):
+    """
+    Try to send embed+attachment (if size ok). If attachment fails or too large,
+    send embed with external gif_url as fallback. Also try DM; if DM fails, DM link-only embed.
+    """
+    max_upload = DISCORD_MAX_UPLOAD
+    # try send to channel
+    try:
+        if gif_bytes and len(gif_bytes) <= max_upload:
+            try:
+                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                embed.set_image(url=f"attachment://{gif_name}")
+                if text_channel:
+                    await text_channel.send(embed=embed, file=file_server)
+            except Exception as e:
+                logger.debug(f"[send_embed_with_media] attach->channel failed: {e}")
+                # fallback to link embed
+                if text_channel:
+                    if gif_url:
+                        # avoid duplicating link if already present
+                        if gif_url not in (embed.description or ""):
+                            embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
+                    await text_channel.send(embed=embed)
+            # try DM with attachment (fresh embed)
+            try:
+                file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
+                await member.send(embed=embed, file=file_dm)
+            except Exception as e:
+                logger.debug(f"[send_embed_with_media] attach->DM failed: {e}")
+                # fallback to DM link-only embed
+                try:
+                    dm_embed = make_embed(embed.title or "Media", embed.description or "", member, kind="join")
+                    if gif_url:
+                        if gif_url not in (dm_embed.description or ""):
+                            dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
+                    await member.send(embed=dm_embed)
+                except Exception as e2:
+                    logger.debug(f"[send_embed_with_media] DM link fallback failed: {e2}")
+        else:
+            # No bytes or file too big — send embed with direct link
+            if gif_url:
+                if gif_url not in (embed.description or ""):
+                    embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
+            if text_channel:
+                await text_channel.send(embed=embed)
+            try:
+                dm_embed = make_embed(embed.title or "Media", embed.description or "", member, kind="join")
+                if gif_url:
+                    if gif_url not in (dm_embed.description or ""):
+                        dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
+                await member.send(embed=dm_embed)
+            except Exception as e:
+                logger.debug(f"[send_embed_with_media] DM link only failed: {e}")
+    except Exception as e:
+        logger.warning(f"[send_embed_with_media] unexpected error: {e}")
+        # last resort: just send embed without media
+        try:
+            if text_channel:
+                await text_channel.send(embed=embed)
+            await member.send(embed=embed)
+        except Exception:
+            logger.debug("[send_embed_with_media] final fallback also failed")
+
 # ------------------ FETCH_GIF (REPLACED: provider-cycle fairness) ------------------
 async def fetch_gif(user_id):
     global PROVIDER_CYCLE, PROVIDER_USED_THIS_CYCLE
 
     user_key = str(user_id)
     sent = data["sent_history"].setdefault(user_key, [])
+
     # Start a new provider cycle if needed
     if not PROVIDER_CYCLE or len(PROVIDER_USED_THIS_CYCLE) >= len(PROVIDER_CYCLE):
         PROVIDER_CYCLE = build_provider_pool()
@@ -642,17 +723,21 @@ async def fetch_gif(user_id):
 
             if not b or not gif_url:
                 continue
-            if filename_has_block_keyword(gif_url): continue
-            if contains_illegal_indicators(gif_url + " " + (positive or "")): continue
+            if filename_has_block_keyword(gif_url):
+                continue
+            if contains_illegal_indicators(gif_url + " " + (positive or "")):
+                continue
 
             gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
             if gif_hash in sent:
                 continue
 
+            # record and persist sent history (immediately)
             sent.append(gif_hash)
             if len(sent) > MAX_USED_GIFS_PER_USER:
                 del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
-            save_data()
+            data["sent_history"][user_key] = sent
+            persist_all_data()
             return b, name, gif_url
 
     return None, None, None
@@ -874,30 +959,8 @@ async def on_voice_state_update(member, before, after):
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-        if gif_bytes:
-            try:
-                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                embed.set_image(url=f"attachment://{gif_name}")
-                if text_channel:
-                    await text_channel.send(embed=embed, file=file_server)
-                try:
-                    file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                    await member.send(embed=embed, file=file_dm)
-                except Exception:
-                    try:
-                        embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
-                        if gif_url:
-                            embed_dm.description += f"\n[View media here]({gif_url})"
-                        await member.send(embed=embed_dm)
-                    except Exception:
-                        logger.debug(f"Failed to DM {member.display_name}")
-            except Exception as e:
-                logger.error(f"Failed to send join image: {e}")
-                if text_channel:
-                    await text_channel.send(embed=embed)
-        else:
-            if text_channel:
-                await text_channel.send(embed=embed)
+        # Use robust send helper
+        await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url)
 
     # LEAVE message
     if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
@@ -905,23 +968,8 @@ async def on_voice_state_update(member, before, after):
         msg = raw.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-        if gif_bytes:
-            try:
-                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                embed.set_image(url=f"attachment://{gif_name}")
-                if text_channel:
-                    await text_channel.send(embed=embed, file=file_server)
-                try:
-                    file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                    await member.send(embed=embed, file=file_dm)
-                except Exception:
-                    pass
-            except Exception:
-                if text_channel:
-                    await text_channel.send(embed=embed)
-        else:
-            if text_channel:
-                await text_channel.send(embed=embed)
+        # Use robust send helper
+        await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url)
 
         # disconnect if empty
         try:
