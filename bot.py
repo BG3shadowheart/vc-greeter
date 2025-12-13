@@ -1,8 +1,8 @@
-# bot_spiciest_final_spicy_only.py
-# Single-file Discord bot — spicy (suggestive) GIFs, avoids explicit nudity.
-# Requirements: aiohttp, discord.py (rewrite), Python 3.10+
-# Env vars required: TOKEN, TENOR_API_KEY (opt), GIPHY_API_KEY (opt), WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt)
-# Recommended: set DEBUG_FETCH="true" in Railway to see provider logs, then disable when happy.
+# bot_spiciest_final_full_nsfw.py
+# NOTE: This script intentionally uses NSFW endpoints and returns explicit images.
+# It still blocks illegal content (minors, bestiality, sexual violence, etc.).
+# Required env vars: TOKEN, optionally TENOR_API_KEY, GIPHY_API_KEY, WAIFUIM_API_KEY, WAIFUIT_API_KEY
+# Dependencies: aiohttp, discord.py (rewrite)
 
 import os
 import io
@@ -17,12 +17,12 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
-# ------------- CONFIG -------------
+# ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 WAIFUIM_API_KEY = os.getenv("WAIFUIM_API_KEY")
-WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")  # Waifu.it token (Authorization: <TOKEN>)
+WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")  # Waifu.it token
 
 _DEBUG_RAW = os.getenv("DEBUG_FETCH", "")
 DEBUG_FETCH = str(_DEBUG_RAW).strip().lower() in ("1", "true", "yes", "on")
@@ -39,57 +39,48 @@ DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 1000
 FETCH_ATTEMPTS = 30
-REQUEST_TIMEOUT = 12
+REQUEST_TIMEOUT = 14
 
-# ------------- TAG SOURCES (seed) -------------
+# ---------------- TAGS & BLOCK LISTS ----------------
+# Seed tags (user-provided tastes)
 _seed_gif_tags = [
     "busty","big breasts","oppai","huge breasts","big boobs",
     "milf","mommy","mature","thick","thicc","thick thighs","thighs","thighfocus",
     "jiggle","bounce","booty","ass","big ass","curvy","round booty","thicc booty",
-    "lingerie","underwear","panties","pantyhose","stockings","garter",
-    "bikini","swimsuit","beach","cleavage","sideboob","underboob","ecchi",
-    "fanservice","teasing","seductive","sexy","flirty","anime waifu","waifu",
-    "cosplay","maid","school uniform","cheerleader","anime lingerie","oppai focus",
-    "playful","blush","wink","kiss","cuddle","hug","dance","shimmy"
+    "lingerie","panties","pantyhose","stockings","garter",
+    "bikini","swimsuit","cleavage","sideboob","underboob","ecchi",
+    "fanservice","teasing","seductive","sexy","flirty","waifu","cosplay","maid","school uniform","cheerleader"
 ]
 
-# ------------- BLOCK / FILTER TAGS -------------
-HARD_TAGS = [
-    "pussy","vagina","labia","clitoris","penis","cock","dick","shaft","testicles","balls","scrotum","anus",
-    "uncensored","nude","naked","topless","bottomless","nipples","nipples out","nipples visible",
-    "penetration","sex","porn","xxx","creampie","cum","cumshot","fisting","scat","bestiality",
-    "underage","minor","loli","shota","child","young","agegap","age_gap","rape"
+# ILLEGAL / PROHIBITED INDICATORS (must always be blocked)
+ILLEGAL_TAGS = [
+    "underage","minor","child","loli","shota","young","agegap","rape","sexual violence",
+    "bestiality","zoophilia","bestial","scat","fisting","incest","pedo","pedophile","creampie"
 ]
-SOFT_TAGS = ["stockings","teasing","sexy","lewd","suggestive","cleavage","bikini","lingerie","thighs","booty","oppai","panties","cosplay","maid","swimsuit","underwear"]
+
+# Filename block signals for extreme/illegal content
 FILENAME_BLOCK_KEYWORDS = ["orgy","creampie","facial","scat","fisting","bestiality"]
+
+# Conservative exclude list for safety
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
-# ------------- Logging -------------
+# ---------------- Logging ----------------
 logging.basicConfig(level=logging.DEBUG if DEBUG_FETCH else logging.INFO)
-logger = logging.getLogger("spiciest-bot")
+logger = logging.getLogger("spiciest-nsfw-bot")
 
-# ------------- Utilities (text normalization / nudity checks) -------------
+# ---------------- Helpers ----------------
 def _normalize_text(s: str) -> str:
     return "" if not s else re.sub(r'[\s\-_]+', ' ', s.lower())
 
-def analyze_nudity_indicators(text: str):
-    """Return (hard_found:bool, soft_count:int)"""
+def contains_illegal_indicators(text: str) -> bool:
+    """Return True if text contains illegal/exploitative indicators that must be blocked."""
     if not text or not isinstance(text, str):
-        return False, 0
+        return False
     normalized = _normalize_text(text)
-    for h in HARD_TAGS:
-        if h in normalized:
-            return True, 0
-    soft_count = 0
-    for s in SOFT_TAGS:
-        if s in normalized:
-            soft_count += 1
-    return False, soft_count
-
-def contains_nude_indicators(text: str) -> bool:
-    hard, soft_count = analyze_nudity_indicators(text)
-    # Hard lens banned; if many soft tags (>=3) treat as risky and block
-    return hard or (soft_count >= 3)
+    for bad in ILLEGAL_TAGS:
+        if bad in normalized:
+            return True
+    return False
 
 def filename_has_block_keyword(url: str) -> bool:
     if not url:
@@ -116,13 +107,11 @@ def _tag_is_disallowed(t: str) -> bool:
     t = t.lower()
     if any(ex in t for ex in EXCLUDE_TAGS):
         return True
-    # Don't ban soft tags — we want those — but block obvious hard tags
-    for h in HARD_TAGS:
-        if h in t:
-            return True
+    if any(b in t for b in ILLEGAL_TAGS):
+        return True
     return False
 
-# ------------- Data file init -------------
+# ---------------- Data management ----------------
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({
@@ -149,18 +138,10 @@ GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowe
 if not GIF_TAGS:
     GIF_TAGS = ["waifu"]
 
-# default provider weights — you can tune these via DATA_FILE provider_weights
 default_weights = {
-    "waifu_pics": 3,
-    "waifu_im": 3,
-    "waifu_it": 2,
-    "nekos_best": 2,
-    "nekos_life": 1,
-    "nekos_moe": 1,
-    "otakugifs": 1,
-    "tenor": 3,
-    "giphy": 3,
-    "animegirls_online": 0
+    "waifu_pics": 3, "waifu_im": 3, "waifu_it": 2, "nekos_best": 2,
+    "nekos_life": 1, "nekos_moe": 1, "otakugifs": 1,
+    "tenor": 3, "giphy": 3, "animegirls_online": 0
 }
 for k, v in default_weights.items():
     data["provider_weights"].setdefault(k, v)
@@ -188,7 +169,7 @@ def add_tag_to_gif_tags(tag: str):
     GIF_TAGS.append(t)
     data["gif_tags"] = _dedupe_preserve_order(data.get("gif_tags", []) + [t])
     save_data()
-    logger.debug(f"learned safe tag: {t}")
+    logger.debug(f"learned tag: {t}")
     return True
 
 _token_split_re = re.compile(r"[^a-z0-9]+")
@@ -205,11 +186,12 @@ async def _download_url(session, url, timeout=REQUEST_TIMEOUT):
     try:
         async with session.get(url, timeout=timeout) as resp:
             if resp.status != 200:
-                logger.debug(f"_download_url {url} -> status {resp.status}")
+                logger.debug(f"_download_url got {resp.status} for {url}")
                 return None, None
             ctype = resp.content_type or ""
+            # allow media types (image/gif, image/jpeg, video/mp4, video/webm, etc.)
             if "html" in ctype:
-                logger.debug(f"_download_url skipping html content for {url}")
+                logger.debug(f"download_url: html content, skipping {url}")
                 return None, None
             b = await resp.read()
             return b, ctype
@@ -217,101 +199,59 @@ async def _download_url(session, url, timeout=REQUEST_TIMEOUT):
         logger.debug(f"_download_url exception {e} for {url}")
         return None, None
 
-# ------------- SPICE MAPPING (tag analysis -> provider queries) -------------
-# The idea: convert user tags into provider-safe queries that prefer 'spicy but not nude'.
+# ---------------- Tag -> provider mapping for NSFW --------------------------------
 SPICY_TERMS = set([
     "busty","big breasts","oppai","big boobs","cleavage","underboob","sideboob",
-    "lingerie","panties","bikini","swimsuit","thighs","thighfocus","stockings",
-    "curvy","booty","ass","big ass","jiggle","bounce","cosplay","maid","school uniform",
-    "cheerleader","seductive","flirty"
+    "lingerie","panties","bikini","swimsuit","thighs","stockings","booty","ass","cosplay","maid"
 ])
 
-def classify_tag_strength(tag: str):
-    """Return 'hard' if contains hard keywords to block, 'soft' if suggestive, 'neutral' otherwise."""
-    if not tag: return "neutral"
-    t = _normalize_text(tag)
-    for h in HARD_TAGS:
-        if h in t:
-            return "hard"
-    soft_count = 0
-    for s in SOFT_TAGS:
-        if s in t:
-            soft_count += 1
-    if any(s in t for s in SPICY_TERMS) or soft_count > 0:
-        return "soft"
-    return "neutral"
-
 def map_tag_for_provider(provider: str, tag: str) -> str:
-    """
-    Convert arbitrary tag to provider-appropriate category or search term.
-    Aim: spicy-but-not-nude (lingerie, bikini, cleavage, oppai, thigh, boots...)
-    """
     t = (tag or "").lower().strip()
     if provider in ("tenor", "giphy"):
-        # search keywords: add "anime" and focus on spicy keywords
-        # prefer explicit spicy terms if present, else fallback to tag
+        # return search that biases NSFW keywords
         for s in SPICY_TERMS:
             if s in t:
                 return f"{s} anime"
-        # if tag is neutral, return "anime waifu"
         return f"{t or 'waifu'} anime"
     if provider == "waifu_pics":
-        # waifu.pics has many SFW categories; to keep 'spicy but not nude' choose SFW categories that convey cute/sexy
-        # If tag matches a known SFW category use it, else fallback to 'waifu'
-        valid_sfw = {"waifu","neko","cuddle","hug","kiss","blush","dance","wink","pat","smug","bonk","awoo","nom","bite"}
-        for s in SPICY_TERMS:
-            if s in t:
-                # Some spicy => prefer 'waifu' (SFW) but will add term to block checks later
-                return "waifu"
-        # if any direct SFW matches:
-        if t in valid_sfw:
-            return t
+        # Use NSFW endpoint categories aggressively. If tag looks like specific category, use it.
+        if t:
+            return t  # allow attempting the NSFW category directly; waifu.pics will often return for known tags
         return "waifu"
     if provider == "waifu_it":
-        # Waifu.it categories vary; we'll fallback to named categories or 'waifu'
-        for s in ("waifu","neko","kitsune","bikini","lingerie","sexy","cosplay"):
-            if s in t:
-                return s
-        return "waifu"
+        # waifu.it: try the tag first
+        return t or "waifu"
     if provider.startswith("nekos"):
-        # nekos.best/nekos.life support 'waifu','neko','avatar','hug','kiss','smug','cuddle'
-        for s in ("waifu","neko","hug","kiss","cuddle","smug","pat"):
-            if s in t:
-                return s
-        # if spicy words present, map to 'waifu'
-        if any(s in t for s in SPICY_TERMS):
-            return "waifu"
-        return t or "waifu"
-    if provider == "otakugifs":
-        # Otakugifs uses 'reaction' param: kiss, hug, slap, dance, wink, cuddle...
-        for s in ("kiss","hug","slap","punch","dance","wink","cuddle"):
-            if s in t:
-                return s
+        # nekos APIs: default to 'waifu' or simple categories
+        if any(s in t for s in ("neko","cat")):
+            return "neko"
+        if any(s in t for s in ("hug","kiss","cuddle","smug")):
+            return t
         return "waifu"
-    if provider == "animegirls_online":
-        return t or "waifu"
-    # fallback
+    if provider == "otakugifs":
+        for v in ("kiss","hug","slap","dance","wink","cuddle"):
+            if v in t:
+                return v
+        return "waifu"
     return t or "waifu"
 
-# ------------- FETCHERS (per-provider) -------------
-# Each fetcher returns (bytes, filename, source_url) or (None,None,None)
+# ------------------ FETCHERS (NSFW first, illegal checks applied) ------------------
+# Each fetcher must block ILLEGAL_TAGS and FILENAME_BLOCK_KEYWORDS.
 
 async def fetch_from_waifu_pics(session, positive):
     try:
         category = map_tag_for_provider("waifu_pics", positive)
-        # Use SFW endpoint to avoid explicit nudity — the mapper still biases spicy terms
-        url = f"https://api.waifu.pics/sfw/{quote_plus(category)}"
+        url = f"https://api.waifu.pics/nsfw/{quote_plus(category)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"waifu_pics {category} -> {resp.status}")
+                logger.debug(f"waifu_pics nsfw {category} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
-            if not gif_url:
-                return None, None, None
-            # quick filters
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
+            if not gif_url: return None, None, None
+            # illegal checks
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
@@ -325,25 +265,22 @@ async def fetch_from_waifu_pics(session, positive):
 async def fetch_from_waifu_im(session, positive):
     try:
         base = "https://api.waifu.im/search"
-        # prefer non-nude results but allow 'suggestive' via tag selection — server controls is_nsfw param
-        params = {"included_tags": positive, "is_nsfw": "false", "limit": 5}
+        params = {"included_tags": positive, "is_nsfw": "true", "limit": 5}
         headers = {}
         if WAIFUIM_API_KEY:
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
         async with session.get(base, params=params, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"waifu.im search -> {resp.status}")
+                logger.debug(f"waifu.im nsfw search -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
+            if not images: return None, None, None
             img = random.choice(images)
             gif_url = img.get("url") or img.get("image") or img.get("src")
-            if not gif_url:
-                return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(img)):
-                return None, None, None
+            if not gif_url: return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(img) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(str(img.get("tags", "")))
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
@@ -357,10 +294,9 @@ async def fetch_from_waifu_im(session, positive):
 async def fetch_from_waifu_it(session, positive):
     try:
         if not WAIFUIT_API_KEY:
-            logger.debug("waifu.it skipped: API key missing")
+            logger.debug("waifu.it skipped: key missing")
             return None, None, None
         category = map_tag_for_provider("waifu_it", positive)
-        # Use v4 (stable)
         endpoint = f"https://waifu.it/api/v4/{quote_plus(category)}"
         headers = {"Authorization": WAIFUIT_API_KEY}
         async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
@@ -368,13 +304,10 @@ async def fetch_from_waifu_it(session, positive):
                 logger.debug(f"waifu.it {endpoint} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
-            # payload shapes vary — try common keys
             gif_url = payload.get("url") or payload.get("image") or (payload.get("data") and payload["data"].get("url"))
-            if not gif_url:
-                logger.debug("waifu.it response missing url")
-                return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
+            if not gif_url: return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
@@ -399,8 +332,8 @@ async def fetch_from_nekos_best(session, positive):
             r = results[0]
             gif_url = r.get("url") or r.get("file") or r.get("image")
             if not gif_url: return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(r)):
-                return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(r) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(r))
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
@@ -422,8 +355,8 @@ async def fetch_from_nekos_life(session, positive):
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image") or payload.get("result")
             if not gif_url: return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(payload)):
-                return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
@@ -449,10 +382,9 @@ async def fetch_from_nekos_moe(session, positive):
             gif_url = item.get("file") or item.get("url") or item.get("original") or item.get("image")
             if not gif_url and item.get("id"):
                 gif_url = f"https://nekos.moe/image/{item['id']}.gif"
-            if not gif_url:
-                return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(item)):
-                return None, None, None
+            if not gif_url: return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(item) + " " + (positive or "")): return None, None, None
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
@@ -478,8 +410,8 @@ async def fetch_from_otakugifs(session, positive):
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("gif") or payload.get("file")
             if not gif_url: return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(payload)):
-                return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
@@ -499,8 +431,8 @@ async def fetch_from_animegirls_online(session, positive):
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
             if not gif_url: return None, None, None
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(payload)):
-                return None, None, None
+            if filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             b, ctype = await _download_url(session, gif_url)
             if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
@@ -514,11 +446,11 @@ async def fetch_from_tenor(session, positive):
     if not TENOR_API_KEY:
         return None, None, None
     try:
-        q = map_tag_for_provider("tenor", positive)
-        tenor_url = f"https://g.tenor.com/v1/search?q={quote_plus(q)}&key={TENOR_API_KEY}&limit=25&contentfilter=low"
+        q = map_tag_for_provider("tenor", positive) if 'map_tag_for_provider' in globals() else (positive or "waifu")
+        tenor_url = f"https://g.tenor.com/v1/search?q={quote_plus(q)}&key={TENOR_API_KEY}&limit=30&contentfilter=off"
         async with session.get(tenor_url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"tenor search -> {resp.status}")
+                logger.debug(f"tenor -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             results = payload.get("results", []) or []
@@ -537,8 +469,8 @@ async def fetch_from_tenor(session, positive):
                             gif_url = entry["url"]; break
                 gif_url = gif_url or r.get("itemurl") or r.get("url")
                 if not gif_url: continue
-                if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(r)):
-                    continue
+                if filename_has_block_keyword(gif_url): continue
+                if contains_illegal_indicators(json.dumps(r) + " " + (positive or "")): continue
                 b, ctype = await _download_url(session, gif_url)
                 if not b: continue
                 name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
@@ -551,11 +483,12 @@ async def fetch_from_giphy(session, positive):
     if not GIPHY_API_KEY:
         return None, None, None
     try:
-        q = map_tag_for_provider("giphy", positive)
-        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={quote_plus(q)}&limit=25&rating=pg-13"
+        q = map_tag_for_provider("giphy", positive) if 'map_tag_for_provider' in globals() else (positive or "waifu")
+        # rating=r lets Giphy return R-rated content
+        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={quote_plus(q)}&limit=30&rating=r"
         async with session.get(giphy_url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"giphy search -> {resp.status}")
+                logger.debug(f"giphy -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             arr = payload.get("data", []) or []
@@ -563,8 +496,8 @@ async def fetch_from_giphy(session, positive):
             for item in arr:
                 gif_url = item.get("images", {}).get("original", {}).get("url")
                 if not gif_url: continue
-                if filename_has_block_keyword(gif_url) or contains_nude_indicators(str(item)):
-                    continue
+                if filename_has_block_keyword(gif_url): continue
+                if contains_illegal_indicators(json.dumps(item) + " " + (positive or "")): continue
                 b, ctype = await _download_url(session, gif_url)
                 if not b: continue
                 name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
@@ -573,7 +506,7 @@ async def fetch_from_giphy(session, positive):
         logger.debug(f"fetch_from_giphy error: {e}")
         return None, None, None
 
-# ------------- Provider registry & pool builder -------------
+# ---------------- Provider registry ----------------
 PROVIDER_FETCHERS = {
     "waifu_pics": fetch_from_waifu_pics,
     "waifu_im": fetch_from_waifu_im,
@@ -590,12 +523,10 @@ PROVIDER_FETCHERS = {
 def build_provider_pool():
     pool = []
     for prov, weight in data["provider_weights"].items():
-        if prov not in PROVIDER_FETCHERS:
-            continue
-        if weight <= 0:
-            continue
+        if prov not in PROVIDER_FETCHERS: continue
+        if weight <= 0: continue
         pool.extend([prov] * max(1, int(weight)))
-    # drop those that require missing keys
+    # remove providers requiring keys when not set
     if not TENOR_API_KEY:
         pool = [p for p in pool if p != "tenor"]
     if not GIPHY_API_KEY:
@@ -603,7 +534,6 @@ def build_provider_pool():
     if not WAIFUIT_API_KEY:
         pool = [p for p in pool if p != "waifu_it"]
     random.shuffle(pool)
-    # fallback: if empty, include any provider that doesn't require missing keys
     if not pool:
         pool = [p for p in PROVIDER_FETCHERS.keys() if not (
             (p == "tenor" and not TENOR_API_KEY) or
@@ -612,7 +542,6 @@ def build_provider_pool():
         )]
     return pool
 
-# ------------- Core fetch loop -------------
 async def fetch_gif(user_id):
     user_key = str(user_id)
     sent = data["sent_history"].setdefault(user_key, [])
@@ -631,16 +560,16 @@ async def fetch_gif(user_id):
             try:
                 result = await fetcher(session, positive)
             except Exception as e:
-                logger.debug(f"fetcher {provider} raised: {e}")
+                logger.debug(f"fetcher {provider} error: {e}")
                 result = (None, None, None)
             if not result or not result[0]:
                 continue
             b, name, gif_url = result
             if not gif_url:
                 continue
-            # final filters
-            if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                continue
+            # final illegal checks (filename + content)
+            if filename_has_block_keyword(gif_url): continue
+            if contains_illegal_indicators(gif_url + " " + (positive or "")): continue
             gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
             if gif_hash in sent:
                 continue
@@ -651,8 +580,7 @@ async def fetch_gif(user_id):
             return b, name, gif_url
     return None, None, None
 
-# ------------- Discord messaging -------------
-# You can keep your previous JOIN_GREETINGS / LEAVE_GREETINGS arrays — reuse them
+# ---------------- Discord events/messages ----------------
 JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
     "✨ {display_name} arrived and the room got a whole lot warmer.",
@@ -815,11 +743,11 @@ LEAVE_GREETINGS = [
     "🪶 {display_name} left — feather trails behind.",
     "🛸 {display_name} left — alien waifu gone."
 ]
-while len(LEAVE_GREETINGS) < 60:
+while len(LEAVE_GREETINGS) < 30:
     LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
 
 def make_embed(title, desc, member, kind="join", count=None):
-    color = discord.Color.purple() if kind == "join" else discord.Color.dark_gray()
+    color = discord.Color.dark_red() if kind == "join" else discord.Color.dark_gray()
     embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -842,15 +770,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     autosave_task.start()
-    logger.info(f"✅ Logged in as {bot.user} (id={bot.user.id})")
+    logger.info(f"Logged in as {bot.user} (id={bot.user.id})")
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.bot:
-        return
+    if member.bot: return
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # Auto-join / move
+    # Auto-join
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         try:
             vc = discord.utils.get(bot.voice_clients, guild=member.guild)
@@ -860,7 +787,7 @@ async def on_voice_state_update(member, before, after):
             else:
                 await after.channel.connect()
         except Exception as e:
-            logger.warning(f"VC join logic error: {e}")
+            logger.warning(f"VC join error: {e}")
 
     # JOIN message
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
@@ -879,7 +806,6 @@ async def on_voice_state_update(member, before, after):
                     file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                     await member.send(embed=embed, file=file_dm)
                 except Exception:
-                    # fallback: DM embed with link only
                     try:
                         embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
                         if gif_url:
@@ -929,6 +855,6 @@ async def on_voice_state_update(member, before, after):
 
 if __name__ == "__main__":
     if not TOKEN:
-        logger.error("TOKEN environment missing. Set TOKEN and restart.")
+        logger.error("TOKEN missing. Set TOKEN and restart.")
     else:
         bot.run(TOKEN)
