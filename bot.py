@@ -134,9 +134,9 @@ if not GIF_TAGS:
     GIF_TAGS = ["waifu"]
 
 default_weights = {
-    "waifu_pics": 1, "waifu_im": 1, "waifu_it": 1, "nekos_best": 1,
+    "waifu_pics": 3, "waifu_im": 3, "waifu_it": 2, "nekos_best": 2,
     "nekos_life": 1, "nekos_moe": 1, "otakugifs": 1,
-    "tenor": 1, "giphy": 1, "animegirls_online": 1
+    "tenor": 3, "giphy": 3, "animegirls_online": 0
 }
 for k, v in default_weights.items():
     data["provider_weights"].setdefault(k, v)
