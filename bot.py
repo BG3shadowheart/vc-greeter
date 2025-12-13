@@ -1,4 +1,4 @@
-# bot_spiciest_final_full_nsfw_expanded_terms.py
+# bot_spiciest_final_full_nsfw_expanded_terms_random.py
 # NSFW bot with expanded provider-specific spicy tag pools (20-30 each).
 # STILL blocks illegal content (minors, bestiality, sexual violence, etc.).
 # Env vars: TOKEN, TENOR_API_KEY (opt), GIPHY_API_KEY (opt), WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt)
@@ -586,24 +586,16 @@ PROVIDER_FETCHERS = {
 }
 
 def build_provider_pool():
-    pool = []
-    for prov, weight in data["provider_weights"].items():
-        if prov not in PROVIDER_FETCHERS: continue
-        if weight <= 0: continue
-        pool.extend([prov] * max(1, int(weight)))
-    if not TENOR_API_KEY:
-        pool = [p for p in pool if p != "tenor"]
-    if not GIPHY_API_KEY:
-        pool = [p for p in pool if p != "giphy"]
-    if not WAIFUIT_API_KEY:
-        pool = [p for p in pool if p != "waifu_it"]
+    # TRUE RANDOM mode: ignore weights, return a shuffled list of available providers.
+    pool = list(PROVIDER_FETCHERS.keys())
+    # remove providers that require missing API keys
+    if not TENOR_API_KEY and "tenor" in pool:
+        pool.remove("tenor")
+    if not GIPHY_API_KEY and "giphy" in pool:
+        pool.remove("giphy")
+    if not WAIFUIT_API_KEY and "waifu_it" in pool:
+        pool.remove("waifu_it")
     random.shuffle(pool)
-    if not pool:
-        pool = [p for p in PROVIDER_FETCHERS.keys() if not (
-            (p == "tenor" and not TENOR_API_KEY) or
-            (p == "giphy" and not GIPHY_API_KEY) or
-            (p == "waifu_it" and not WAIFUIT_API_KEY)
-        )]
     return pool
 
 async def fetch_gif(user_id):
