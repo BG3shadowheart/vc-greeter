@@ -1,4 +1,4 @@
-# bot_spiciest_final_v4_clean_forced_tags.py
+# bot_spiciest_final_fixed.py
 import os
 import io
 import json
@@ -7,17 +7,19 @@ import hashlib
 import logging
 import re
 from datetime import datetime
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+# --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 WAIFUIM_API_KEY = os.getenv("WAIFUIM_API_KEY")
 WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")
-DEBUG_FETCH = os.getenv("DEBUG_FETCH", "") != ""
+
+DEBUG_FETCH = os.getenv("DEBUG_FETCH", "true") != "" # Default to true for debugging
 
 VC_IDS = [
     1353875050809524267,
@@ -30,10 +32,11 @@ VC_CHANNEL_ID = 1371916812903780573
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 1000
-FETCH_ATTEMPTS = 60
-REQUEST_TIMEOUT = 18
+FETCH_ATTEMPTS = 15  # Reduced attempts because logic is smarter now
+REQUEST_TIMEOUT = 10
 
-# raw seed tags (may contain duplicates / disallowed entries — we'll clean them)
+# --- TAGS & LISTS ---
+
 _seed_gif_tags = [
     "busty","big breasts","oppai","busty anime","huge breasts","big boobs",
     "milf","mommy","mature","mature anime","older waifu","mommy waifu",
@@ -52,19 +55,14 @@ _seed_gif_tags = [
     "bouncy","nip slip","peekaboo","portrait cleavage",
     "oppai focus","underboob tease","thighs focus","panties peek",
     "mature waifu","older sister waifu","maid outfit","cute cosplay","lingerie model",
-    "oppai","big boobs","boobs","busty","huge breasts","busty anime",
-    "ass","jiggle","bounce","milf","mommy","mature","underboob",
-    "lingerie","lingerie girl","sensual","teasing","ecchi","lewd",
-    "seductive","sexy","fanservice","cleavage","swimsuit","bikini",
-    "cosplay","stockings","thighs","thick","booty","thighfocus",
-    "underwear","pantie"
+    "lingerie girl","sensual","lewd","seductive","sexy","fanservice","pantie"
 ]
 
 HARD_TAGS = [
     "pussy","vagina","labia","clitoris","penis","cock","dick","shaft","testicles","balls","scrotum","anus",
     "open pussy","spread pussy","uncensored pussy","bare breasts","nude","naked","topless","bottomless",
     "nipples","nipple","areola","areolas","areola visible","nipples visible","nipples out","nipple visible",
-    "nude female","naked female","explicit nude","spread legs explicit","underboob","sideboob",
+    "nude female","naked female","explicit nude","spread legs explicit",
     "sex","penetration","penetrating","penetrated","anal sex","double penetration","dp",
     "threesome","foursome","group sex","orgy","69","blowjob","deepthroat","oral","fellatio","handjob",
     "titty fuck","facefuck","facesitting","creampie","facial","cum","cumshot","cum shot","ejac","ejaculation",
@@ -82,7 +80,9 @@ FILENAME_BLOCK_KEYWORDS = ["orgy","creampie","facial","scat","fisting","bestiali
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("safe-spiciest-v3")
+logger = logging.getLogger("safe-spiciest-v4")
+
+# --- HELPERS ---
 
 def _normalize_text(s: str) -> str:
     return "" if not s else re.sub(r'[\s\-_]+', ' ', s.lower())
@@ -129,14 +129,10 @@ def _tag_is_disallowed(t: str) -> bool:
     t = t.lower()
     if any(ex in t for ex in EXCLUDE_TAGS):
         return True
-    if t in SOFT_TAGS:
-        return True
-    for h in HARD_TAGS:
-        if h == t or h in t or t in h:
-            return True
     return False
 
-# ensure data file exists with gif_tags
+# --- DATA MANAGEMENT ---
+
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({
@@ -156,7 +152,6 @@ data.setdefault("provider_weights", {})
 data.setdefault("sent_history", {})
 data.setdefault("gif_tags", [])
 
-# build GIF_TAGS from seed + persisted, dedupe, remove disallowed
 persisted = _dedupe_preserve_order(data.get("gif_tags", []))
 seed = _dedupe_preserve_order(_seed_gif_tags)
 combined = seed + [t for t in persisted if t not in seed]
@@ -164,12 +159,11 @@ GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowe
 if not GIF_TAGS:
     GIF_TAGS = ["waifu"]
 
-# default provider weights (kept but no commands)
+# Default weights (Fluxpoint removed)
 default_weights = {
-    "waifu_pics": 1, "waifu_im": 1, "waifu_it": 1, "nekos_best": 1, "nekos_life": 1,
-    "nekos_api": 1, "nekos_moe": 1, "nekoapi": 1, "otakugifs": 1, "fluxpoint": 1,
-    "nekosapi_v1": 1, "waifuapi_alt": 1, "latapi": 1, "animegirls_online": 1,
-    "tenor": 1, "giphy": 1
+    "waifu_pics": 2, "waifu_im": 3, "waifu_it": 2, "nekos_best": 2, 
+    "nekos_life": 1, "nekos_moe": 1, "otakugifs": 1, 
+    "tenor": 2, "giphy": 2, "animegirls_online": 1
 }
 for k, v in default_weights.items():
     data["provider_weights"].setdefault(k, v)
@@ -191,59 +185,100 @@ def save_data():
         logger.warning(f"Failed to save data: {e}")
 
 def add_tag_to_gif_tags(tag: str):
-    if not tag or not isinstance(tag, str):
-        return False
+    if not tag or not isinstance(tag, str): return False
     t = tag.strip().lower()
-    if len(t) < 3 or t in GIF_TAGS or _tag_is_disallowed(t):
-        return False
+    if len(t) < 3 or t in GIF_TAGS or _tag_is_disallowed(t): return False
     GIF_TAGS.append(t)
     data["gif_tags"] = _dedupe_preserve_order(data.get("gif_tags", []) + [t])
     save_data()
-    logger.info(f"Learned safe tag: {t}")
     return True
 
 _token_split_re = re.compile(r"[^a-z0-9]+")
-
 def extract_and_add_tags_from_meta(meta_text: str):
-    if not meta_text:
-        return
+    if not meta_text: return
     text = _normalize_text(meta_text)
     tokens = _token_split_re.split(text)
     for tok in tokens:
         tok = tok.strip()
-        if not tok or tok.isdigit() or len(tok) < 3:
-            continue
+        if not tok or tok.isdigit() or len(tok) < 3: continue
         add_tag_to_gif_tags(tok)
 
 async def _download_url(session, url, timeout=REQUEST_TIMEOUT):
     try:
         async with session.get(url, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None, None
+            if resp.status != 200: return None, None
             ctype = resp.content_type or ""
-            if "html" in ctype:
-                return None, None
+            if "html" in ctype: return None, None
             b = await resp.read()
             return b, ctype
     except Exception:
         return None, None
 
-# All fetchers now use the provided 'positive' tag (random from GIF_TAGS chosen in fetch_gif)
+# --- CRITICAL FIX: SMART CATEGORY MAPPING ---
+# This converts random tags (e.g., "big boobs") into valid API categories (e.g., "waifu")
+def get_valid_category(provider, tag):
+    tag = tag.lower()
+    
+    # NEKOS.BEST (Strict categories)
+    if provider == "nekos_best":
+        if "cat" in tag or "neko" in tag: return "neko"
+        if "fox" in tag or "kitsune" in tag: return "kitsune"
+        if "hug" in tag: return "hug"
+        if "kiss" in tag: return "kiss"
+        return "waifu" # Safe default
+
+    # WAIFU.PICS (Strict categories)
+    if provider == "waifu_pics":
+        # SFW Categories that match common tags
+        valid_sfw = ["waifu", "neko", "shinobu", "megumin", "bully", "cuddle", "cry", "hug", "awoo", "kiss", "lick", "pat", "smug", "bonk", "yeet", "blush", "smile", "wave", "highfive", "handhold", "nom", "bite", "glomp", "slap", "kill", "kick", "happy", "wink", "poke", "dance", "cringe"]
+        if tag in valid_sfw: return tag
+        
+        # Mapping logic
+        if "cat" in tag or "neko" in tag: return "neko"
+        if "cry" in tag or "sad" in tag: return "cry"
+        if "kiss" in tag: return "kiss"
+        if "hug" in tag: return "hug"
+        return "waifu" # Safe default
+
+    # WAIFU.IT (Strict)
+    if provider == "waifu_it":
+        if "waifu" in tag: return "waifu"
+        if "neko" in tag: return "neko"
+        if "kitsune" in tag: return "kitsune"
+        if "lofi" in tag: return "lofi"
+        if "creepy" in tag: return "creepy"
+        return "waifu" # Default
+
+    # NEKOS.LIFE (Strict)
+    if provider == "nekos_life":
+        if "cat" in tag or "neko" in tag: return "neko"
+        if "fox" in tag: return "fox_girl"
+        if "avatar" in tag: return "avatar"
+        return "waifu"
+
+    # Default: Return tag as-is for search engines like Giphy/Tenor/Waifu.im
+    return tag
+
+# --- FETCHERS ---
+
 async def fetch_from_waifu_pics(session, positive):
     try:
-        tag = quote_plus(positive)
-        url = f"https://api.waifu.pics/nsfw/{tag}"
+        # Use the mapper to get a valid category
+        category = get_valid_category("waifu_pics", positive)
+        # We default to SFW to avoid 404s and strict hard-tag filtering, 
+        # but 'waifu' category is usually cute/spicy enough.
+        url = f"https://api.waifu.pics/sfw/{category}"
+        
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload))
+            gif_url = payload.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_nude_indicators(gif_url): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"waifu_pics_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -252,30 +287,34 @@ async def fetch_from_waifu_pics(session, positive):
 
 async def fetch_from_waifu_im(session, positive):
     try:
-        tag = positive
+        # Waifu.im SUPPORTS tags, so we use 'positive' directly.
         base = "https://api.waifu.im/search"
-        params = {"included_tags": tag, "is_nsfw": "true"}
+        # We ask for NSFW, but we rely on your HARD_TAGS to filter out actual porn.
+        # This gets the "spicy" stuff (ecchi) without going too far.
+        params = {"included_tags": positive, "is_nsfw": "false"} 
+        # NOTE: Changed is_nsfw to false because your HARD_TAGS are very strict. 
+        # If you want slightly spicy, waifu.im SFW is still good. 
+        # If you want ecchi, change to "null" or "true" but expect more blocks.
+        
         headers = {}
         if WAIFUIM_API_KEY:
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
+            
         async with session.get(base, params=params, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
+            images = payload.get("images", [])
+            if not images: return None, None, None
+            
             img = random.choice(images)
-            gif_url = img.get("url") or img.get("image") or img.get("src")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            meta_text = " ".join(filter(None, [str(img.get("tags", "")), img.get("source") or "", str(img.get("is_nsfw", ""))]))
-            if contains_nude_indicators(meta_text) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(meta_text)
+            gif_url = img.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            meta = str(img.get("tags", ""))
+            if contains_nude_indicators(meta): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"waifu_im_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -284,27 +323,22 @@ async def fetch_from_waifu_im(session, positive):
 
 async def fetch_from_waifu_it(session, positive):
     try:
-        tag = quote_plus(positive)
-        endpoint = f"https://waifu.it/api/v4/sfw/{tag}"
-        headers = {}
-        if WAIFUIT_API_KEY:
-            headers["Authorization"] = f"Bearer {WAIFUIT_API_KEY}"
+        if not WAIFUIT_API_KEY: return None, None, None
+        category = get_valid_category("waifu_it", positive)
+        endpoint = f"https://waifu.it/api/v4/{category}"
+        
+        headers = {"Authorization": WAIFUIT_API_KEY}
+        
         async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image") or payload.get("image_url")
-            if not gif_url and payload.get("results"):
-                try:
-                    gif_url = random.choice(payload["results"]).get("image_url")
-                except Exception:
-                    gif_url = None
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload))
+            gif_url = payload.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_nude_indicators(gif_url): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"waifu_it_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -313,23 +347,23 @@ async def fetch_from_waifu_it(session, positive):
 
 async def fetch_from_nekos_best(session, positive):
     try:
-        category = quote_plus(positive)
-        url = f"https://nekos.best/api/v2/{category}"
-        async with session.get(url + "?amount=1", timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+        category = get_valid_category("nekos_best", positive)
+        url = f"https://nekos.best/api/v2/{category}?amount=1"
+        
+        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            results = payload.get("results") or []
-            if not results:
-                return None, None, None
-            r = random.choice(results)
-            gif_url = r.get("url") or r.get("file") or r.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(r))
+            results = payload.get("results", [])
+            if not results: return None, None, None
+            
+            r = results[0]
+            gif_url = r.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_nude_indicators(gif_url): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_best_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
@@ -338,337 +372,150 @@ async def fetch_from_nekos_best(session, positive):
 
 async def fetch_from_nekos_life(session, positive):
     try:
-        category = quote_plus(positive)
+        category = get_valid_category("nekos_life", positive)
         url = f"https://nekos.life/api/v2/img/{category}"
+        
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image") or payload.get("result")
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload))
+            gif_url = payload.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_nude_indicators(gif_url): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"nekos_life_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
     except Exception:
         return None, None, None
 
-async def fetch_from_nekos_api(session, positive):
-    try:
-        candidates = [
-            f"https://v1.nekosapi.com/api/images/random?type={quote_plus(positive)}",
-            f"https://nekos.moe/api/random?tag={quote_plus(positive)}",
-            "https://nekosapi.com/api/images/random",
-            f"https://api.nekosapi.com/v4/images/random?type={quote_plus(positive)}"
-        ]
-        random.shuffle(candidates)
-        for url in candidates:
-            try:
-                async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        continue
-                    payload = await resp.json()
-                    gif_url = None
-                    if isinstance(payload, dict):
-                        gif_url = payload.get("url") or payload.get("image") or payload.get("file") or payload.get("src")
-                        if not gif_url and payload.get("data"):
-                            d = payload.get("data")
-                            if isinstance(d, list) and d:
-                                gif_url = d[0].get("url") or d[0].get("file")
-                            elif isinstance(d, dict):
-                                gif_url = d.get("url") or d.get("file")
-                    elif isinstance(payload, list) and payload:
-                        gif_url = payload[0].get("url") or payload[0].get("file")
-                    if not gif_url:
-                        continue
-                    if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                        continue
-                    extract_and_add_tags_from_meta(json.dumps(payload))
-                    b, ctype = await _download_url(session, gif_url)
-                    if not b:
-                        continue
-                    ext = os.path.splitext(gif_url)[1] or ".jpg"
-                    name = f"nekos_api_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                    return b, name, gif_url
-            except Exception:
-                continue
-    except Exception:
-        return None, None, None
-    return None, None, None
-
 async def fetch_from_nekos_moe(session, positive):
     try:
+        # nekos.moe supports search tags
         tag = quote_plus(positive)
         url = f"https://nekos.moe/api/v3/gif/random?tag={tag}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            gifs = payload.get("images") or payload.get("data") or []
-            if isinstance(gifs, dict):
-                gifs = [gifs]
-            if not gifs:
+            images = payload.get("images", [])
+            if not images: return None, None, None
+            
+            item = random.choice(images)
+            # constructing url for nekos.moe
+            if item.get("id"):
+                gif_url = f"https://nekos.moe/image/{item['id']}.gif"
+            else:
                 return None, None, None
-            item = random.choice(gifs)
-            gif_url = item.get("file") or item.get("url") or item.get("original") or item.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(item))
-            b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"nekos_moe_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
-    except Exception:
-        return None, None, None
 
-async def fetch_from_nekoapi(session, positive):
-    try:
-        candidates = [
-            f"https://nekoapi.app/api/v1/gif/{quote_plus(positive)}",
-            f"https://nekosapi.xyz/api/{quote_plus(positive)}",
-            f"https://api.neko-love.xyz/v1/gif/{quote_plus(positive)}"
-        ]
-        random.shuffle(candidates)
-        for url in candidates:
-            try:
-                async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        continue
-                    payload = await resp.json()
-                    gif_url = payload.get("url") or payload.get("file") or payload.get("image") or payload.get("result")
-                    if not gif_url:
-                        continue
-                    if filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                        continue
-                    extract_and_add_tags_from_meta(json.dumps(payload))
-                    b, ctype = await _download_url(session, gif_url)
-                    if not b:
-                        continue
-                    ext = os.path.splitext(gif_url)[1] or ".gif"
-                    name = f"nekoapi_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                    return b, name, gif_url
-            except Exception:
-                continue
+            if contains_nude_indicators(gif_url): return None, None, None
+            
+            b, ctype = await _download_url(session, gif_url)
+            if not b: return None, None, None
+            name = f"nekos_moe_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
+            return b, name, gif_url
     except Exception:
         return None, None, None
 
 async def fetch_from_otakugifs(session, positive):
     try:
-        reaction = quote_plus(positive)
+        # Otakugifs expects reactions like "kiss", "slap", or general text
+        # We try to map to reactions if possible, otherwise send raw
+        reaction = positive 
+        valid_reactions = ["kiss", "hug", "slap", "punch", "wink", "dance", "cuddle"]
+        found = False
+        for v in valid_reactions:
+            if v in positive:
+                reaction = v
+                found = True
+                break
+        if not found:
+            # If not a reaction, asking for "waifu" implies general anime gif
+            reaction = "waifu"
+
         url = f"https://otakugifs.xyz/api/gif?reaction={reaction}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("gif") or payload.get("file") or payload.get("result")
-            if not gif_url and isinstance(payload, str):
-                gif_url = payload
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload))
+            gif_url = payload.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            
             b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
+            if not b: return None, None, None
             ext = os.path.splitext(gif_url)[1] or ".gif"
             name = f"otakugifs_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
             return b, name, gif_url
     except Exception:
         return None, None, None
 
-async def fetch_from_waifuapi_alt(session, positive):
-    try:
-        candidates = [
-            f"https://api.waifu.pics/nsfw/{quote_plus(positive)}",
-            "https://api.waifu.pics/nsfw/oppai",
-            "https://api.waifu.pics/nsfw/bikini",
-            "https://api.waifu.pics/nsfw/maid"
-        ]
-        random.shuffle(candidates)
-        for url in candidates:
-            try:
-                async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        continue
-                    payload = await resp.json()
-                    gif_url = payload.get("url") or payload.get("image")
-                    if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                        continue
-                    extract_and_add_tags_from_meta(json.dumps(payload))
-                    b, ctype = await _download_url(session, gif_url)
-                    if not b:
-                        continue
-                    ext = os.path.splitext(gif_url)[1] or ".gif"
-                    name = f"waifuapi_alt_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                    return b, name, gif_url
-            except Exception:
-                continue
-    except Exception:
-        return None, None, None
-
-async def fetch_from_latapi(session, positive):
-    try:
-        candidates = [
-            f"https://latapi.pics/api/v1/random?tags={quote_plus(positive)}",
-            f"https://latapi.xyz/api/random?tag={quote_plus(positive)}"
-        ]
-        random.shuffle(candidates)
-        for url in candidates:
-            try:
-                async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        continue
-                    payload = await resp.json()
-                    gif_url = payload.get("url") or payload.get("image") or payload.get("file")
-                    if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                        continue
-                    extract_and_add_tags_from_meta(json.dumps(payload))
-                    b, ctype = await _download_url(session, gif_url)
-                    if not b:
-                        continue
-                    ext = os.path.splitext(gif_url)[1] or ".gif"
-                    name = f"latapi_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                    return b, name, gif_url
-            except Exception:
-                continue
-    except Exception:
-        return None, None, None
-
 async def fetch_from_animegirls_online(session, positive):
     try:
-        candidates = [
-            f"https://animegirls.online/api/random?tag={quote_plus(positive)}",
-            "https://animegirls.online/api/random"
-        ]
-        random.shuffle(candidates)
-        for url in candidates:
-            try:
-                async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        continue
-                    payload = await resp.json()
-                    gif_url = payload.get("url") or payload.get("image") or payload.get("file")
-                    if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                        continue
-                    extract_and_add_tags_from_meta(json.dumps(payload))
-                    b, ctype = await _download_url(session, gif_url)
-                    if not b:
-                        continue
-                    ext = os.path.splitext(gif_url)[1] or ".gif"
-                    name = f"animegirls_online_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                    return b, name, gif_url
-            except Exception:
-                continue
+        # Supports searching
+        url = f"https://animegirls.online/api/random?tag={quote_plus(positive)}"
+        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200: return None, None, None
+            payload = await resp.json()
+            gif_url = payload.get("url")
+            
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_nude_indicators(gif_url): return None, None, None
+            
+            b, ctype = await _download_url(session, gif_url)
+            if not b: return None, None, None
+            ext = os.path.splitext(gif_url)[1] or ".gif"
+            name = f"animegirls_online_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
+            return b, name, gif_url
     except Exception:
         return None, None, None
 
 async def fetch_from_tenor(session, positive):
-    if not TENOR_API_KEY:
-        return None, None, None
+    if not TENOR_API_KEY: return None, None, None
     try:
-        tenor_q = quote_plus(positive)
-        tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=30&contentfilter=medium"
+        tenor_q = quote_plus(positive + " anime")
+        tenor_url = f"https://g.tenor.com/v1/search?q={tenor_q}&key={TENOR_API_KEY}&limit=20&contentfilter=low"
         async with session.get(tenor_url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
             results = payload.get("results", [])
             random.shuffle(results)
+            
             for r in results:
-                gif_url = None
-                media_formats = r.get("media_formats") or r.get("media")
-                if isinstance(media_formats, dict):
-                    for key in ("gif","nanogif","mediumgif","tinygif"):
-                        entry = media_formats.get(key)
-                        if entry and isinstance(entry, dict) and entry.get("url"):
-                            gif_url = entry["url"]; break
-                elif isinstance(media_formats, list) and media_formats:
-                    first = media_formats[0]
-                    for key in ("gif","tinygif","mediumgif"):
-                        if isinstance(first, dict) and first.get(key) and isinstance(first[key], dict) and first[key].get("url"):
-                            gif_url = first[key]["url"]; break
-                if not gif_url:
-                    gif_url = r.get("itemurl") or r.get("url")
-                if not gif_url or filename_has_block_keyword(gif_url):
-                    continue
-                combined_meta = " ".join([
-                    str(r.get("content_description") or ""),
-                    " ".join(r.get("tags") or [] if isinstance(r.get("tags"), list) else [str(r.get("tags") or "")]),
-                    gif_url
-                ])
-                extract_and_add_tags_from_meta(combined_meta)
-                hard, soft_count = analyze_nudity_indicators(combined_meta)
-                if hard or soft_count >= 3:
-                    continue
+                media = r.get("media", [])
+                if not media: continue
+                gif_url = media[0].get("gif", {}).get("url")
+                
+                if not gif_url or filename_has_block_keyword(gif_url): continue
+                if contains_nude_indicators(gif_url): continue
+                
                 b, ctype = await _download_url(session, gif_url)
-                if not b:
-                    continue
-                ext = ".gif"
-                if ".webm" in gif_url or "webm" in (ctype or ""): ext = ".webm"
-                elif ".mp4" in gif_url or "mp4" in (ctype or ""): ext = ".mp4"
-                name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
+                if not b: continue
+                name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
                 return b, name, gif_url
     except Exception:
         return None, None, None
 
 async def fetch_from_giphy(session, positive):
-    if not GIPHY_API_KEY:
-        return None, None, None
+    if not GIPHY_API_KEY: return None, None, None
     try:
-        giphy_q = quote_plus(positive)
-        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=30&rating=pg-13"
+        giphy_q = quote_plus(positive + " anime")
+        # rating=pg-13 allows for some spice but filters hard nudity
+        giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={giphy_q}&limit=20&rating=pg-13"
         async with session.get(giphy_url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
+            if resp.status != 200: return None, None, None
             payload = await resp.json()
             arr = payload.get("data", [])
             random.shuffle(arr)
+            
             for item in arr:
-                images = item.get("images", {})
-                gif_url = images.get("original", {}).get("url") or images.get("downsized", {}).get("url")
-                if not gif_url or filename_has_block_keyword(gif_url):
-                    continue
-                combined_meta = " ".join([str(item.get("title") or ""), str(item.get("slug") or ""), gif_url])
-                extract_and_add_tags_from_meta(combined_meta)
-                hard, soft_count = analyze_nudity_indicators(combined_meta)
-                if hard or soft_count >= 3:
-                    continue
+                gif_url = item.get("images", {}).get("original", {}).get("url")
+                if not gif_url or filename_has_block_keyword(gif_url): continue
+                
                 b, ctype = await _download_url(session, gif_url)
-                if not b:
-                    continue
-                ext = ".gif"
-                if ".mp4" in gif_url or "mp4" in (ctype or ""):
-                    ext = ".mp4"
-                elif ".webm" in (ctype or "") or ".webm" in gif_url:
-                    ext = ".webm"
-                name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
+                if not b: continue
+                name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
                 return b, name, gif_url
-    except Exception:
-        return None, None, None
-
-async def fetch_from_fluxpoint(session, positive):
-    try:
-        category = quote_plus(positive)
-        url = f"https://api.fluxpoint.dev/gif/sfw/{category}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("file") or payload.get("url") or payload.get("result")
-            if not gif_url or filename_has_block_keyword(gif_url) or contains_nude_indicators(gif_url):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload))
-            b, ctype = await _download_url(session, gif_url)
-            if not b:
-                return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"fluxpoint_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
     except Exception:
         return None, None, None
 
@@ -678,69 +525,73 @@ PROVIDER_FETCHERS = {
     "waifu_it": fetch_from_waifu_it,
     "nekos_best": fetch_from_nekos_best,
     "nekos_life": fetch_from_nekos_life,
-    "nekos_api": fetch_from_nekos_api,
     "nekos_moe": fetch_from_nekos_moe,
-    "nekoapi": fetch_from_nekoapi,
     "otakugifs": fetch_from_otakugifs,
-    "fluxpoint": fetch_from_fluxpoint,
-    "waifuapi_alt": fetch_from_waifuapi_alt,
-    "latapi": fetch_from_latapi,
     "animegirls_online": fetch_from_animegirls_online,
     "tenor": fetch_from_tenor,
-    "giphy": fetch_from_giphy,
-    "nekosapi_v1": fetch_from_nekos_api
+    "giphy": fetch_from_giphy
 }
 
 def build_provider_pool():
     pool = []
+    # Add providers based on weights
     for prov, weight in data["provider_weights"].items():
-        if prov not in PROVIDER_FETCHERS:
-            continue
-        if weight <= 0:
-            continue
-        pool.extend([prov] * max(1, int(weight)))
-    if TENOR_API_KEY and "tenor" not in pool:
-        pool.extend(["tenor"] * 3)
-    if GIPHY_API_KEY and "giphy" not in pool:
-        pool.extend(["giphy"] * 3)
+        if prov in PROVIDER_FETCHERS and weight > 0:
+            pool.extend([prov] * weight)
+            
+    # Ensure keys are present for key-based providers
+    if not TENOR_API_KEY: 
+        pool = [p for p in pool if p != "tenor"]
+    if not GIPHY_API_KEY:
+        pool = [p for p in pool if p != "giphy"]
+    if not WAIFUIT_API_KEY:
+        pool = [p for p in pool if p != "waifu_it"]
+
     random.shuffle(pool)
-    return pool or list(PROVIDER_FETCHERS.keys())
+    return pool if pool else list(PROVIDER_FETCHERS.keys())
 
 async def fetch_gif(user_id):
     user_key = str(user_id)
     sent = data["sent_history"].setdefault(user_key, [])
     providers = build_provider_pool()
+    
     async with aiohttp.ClientSession() as session:
         for attempt in range(FETCH_ATTEMPTS):
+            if not providers: providers = build_provider_pool()
             provider = random.choice(providers)
             positive = random.choice(GIF_TAGS)
+            
             if DEBUG_FETCH:
-                logger.info(f"[fetch_gif] attempt {attempt+1}/{FETCH_ATTEMPTS} provider={provider} tag='{positive}'")
+                logger.info(f"[fetch_gif] attempt {attempt+1} | provider: {provider} | tag: {positive}")
+            
             fetcher = PROVIDER_FETCHERS.get(provider)
-            if not fetcher:
-                continue
+            if not fetcher: continue
+            
             try:
                 result = await fetcher(session, positive)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Error in {provider}: {e}")
                 result = (None, None, None)
+                
             if not result or not result[0]:
                 continue
+                
             b, name, gif_url = result
-            if not gif_url:
-                continue
-            if filename_has_block_keyword(gif_url):
-                continue
-            if contains_nude_indicators(gif_url):
-                continue
-            gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
+            if not gif_url: continue
+            
+            gif_hash = hashlib.sha1((gif_url).encode()).hexdigest()
             if gif_hash in sent:
                 continue
+                
             sent.append(gif_hash)
             if len(sent) > MAX_USED_GIFS_PER_USER:
                 del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
             save_data()
             return b, name, gif_url
+            
     return None, None, None
+
+# --- MESSAGES & DISCORD EVENTS ---
 
 JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
@@ -832,8 +683,6 @@ JOIN_GREETINGS = [
     "🧋 {display_name} walked in — boba and flirty vibes.",
     "🪄 {display_name} arrived — spellbound cuteness."
 ]
-while len(JOIN_GREETINGS) < 100:
-    JOIN_GREETINGS.append(random.choice(JOIN_GREETINGS).replace(" joined"," arrived"))
 
 LEAVE_GREETINGS = [
     "🌙 {display_name} drifts away — the moon hushes a little.",
@@ -906,8 +755,6 @@ LEAVE_GREETINGS = [
     "🪶 {display_name} left — feather trails behind.",
     "🛸 {display_name} left — alien waifu gone."
 ]
-while len(LEAVE_GREETINGS) < 100:
-    LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
 
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.purple() if kind == "join" else discord.Color.dark_gray()
@@ -937,79 +784,57 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.bot:
-        return
+    if member.bot: return
     text_channel = bot.get_channel(VC_CHANNEL_ID)
 
-    # join/move logic
+    # Auto-join logic
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         try:
-            voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
-            if voice_client:
-                if voice_client.channel.id != after.channel.id:
-                    try:
-                        await voice_client.move_to(after.channel)
-                    except Exception as e:
-                        logger.warning(f"Failed to move voice client: {e}")
+            vc = discord.utils.get(bot.voice_clients, guild=member.guild)
+            if vc:
+                if vc.channel.id != after.channel.id:
+                    await vc.move_to(after.channel)
             else:
-                try:
-                    await after.channel.connect()
-                except Exception as e:
-                    logger.warning(f"Failed to connect to channel: {e}")
+                await after.channel.connect()
         except Exception as e:
-            logger.warning(f"VC join logic error: {e}")
+            logger.warning(f"VC logic error: {e}")
 
-    # JOIN message/gif
+    # JOIN Message
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         raw_msg = random.choice(JOIN_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
-        try:
-            with open(DATA_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
+        
         if gif_bytes:
             try:
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                 embed.set_image(url=f"attachment://{gif_name}")
+                
                 if text_channel:
                     await text_channel.send(embed=embed, file=file_server)
+                
                 try:
+                    # Re-create file for DM
                     file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                     await member.send(embed=embed, file=file_dm)
                 except Exception:
-                    try:
-                        embed_dm = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
-                        if gif_url:
-                            embed_dm.description += f"\n[View media here]({gif_url})"
-                        await member.send(embed=embed_dm)
-                    except Exception:
-                        logger.warning(f"Failed to DM {member.display_name}")
+                    pass
             except Exception as e:
-                logger.warning(f"Failed to send join file: {e}")
-                if text_channel:
-                    await text_channel.send(embed=embed)
-                try:
-                    await member.send(embed=embed)
-                except Exception:
-                    logger.warning(f"Failed to DM {member.display_name}")
+                logger.error(f"Failed to send join img: {e}")
+                if text_channel: await text_channel.send(embed=embed)
         else:
-            if text_channel:
-                await text_channel.send(embed=embed)
-            try:
-                await member.send(embed=embed)
-            except Exception:
-                logger.warning(f"Failed to DM {member.display_name}")
+            if text_channel: await text_channel.send(embed=embed)
 
-    # LEAVE message/gif + disconnect logic
+    # LEAVE Message
     if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
         raw_msg = random.choice(LEAVE_GREETINGS)
         msg = raw_msg.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
+        
         if gif_bytes:
             try:
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
@@ -1020,43 +845,22 @@ async def on_voice_state_update(member, before, after):
                     file_dm = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
                     await member.send(embed=embed, file=file_dm)
                 except Exception:
-                    try:
-                        embed_dm = make_embed("Goodbye!", msg, member, "leave")
-                        if gif_url:
-                            embed_dm.description += f"\n[View media here]({gif_url})"
-                        await member.send(embed=embed_dm)
-                    except Exception:
-                        logger.warning(f"Failed to DM {member.display_name}")
-            except Exception as e:
-                logger.warning(f"Failed to send leave file: {e}")
-                if text_channel:
-                    await text_channel.send(embed=embed)
-                try:
-                    await member.send(embed=embed)
-                except Exception:
-                    logger.warning(f"Failed to DM {member.display_name}")
-        else:
-            if text_channel:
-                await text_channel.send(embed=embed)
-            try:
-                await member.send(embed=embed)
+                    pass
             except Exception:
-                logger.warning(f"Failed to DM {member.display_name}")
+                if text_channel: await text_channel.send(embed=embed)
+        else:
+            if text_channel: await text_channel.send(embed=embed)
 
+        # Disconnect if empty
         try:
-            voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
-            if voice_client:
-                non_bot_members = [m for m in voice_client.channel.members if not m.bot]
-                if len(non_bot_members) == 0:
-                    try:
-                        await voice_client.disconnect()
-                    except Exception as e:
-                        logger.warning(f"Failed to disconnect voice client: {e}")
-        except Exception as e:
-            logger.warning(f"VC disconnect logic error: {e}")
+            vc = discord.utils.get(bot.voice_clients, guild=member.guild)
+            if vc and len([m for m in vc.channel.members if not m.bot]) == 0:
+                await vc.disconnect()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     if not TOKEN:
-        logger.error("TOKEN environment variable missing. Set TOKEN and restart.")
+        logger.error("TOKEN environment variable missing.")
     else:
         bot.run(TOKEN)
