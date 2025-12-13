@@ -1,19 +1,3 @@
-# bot_spiciest_final_all_in_one_fixed.py
-# Final consolidated NSFW spiciest bot (round-robin / provider-term priority)
-# Requirements: aiohttp, discord.py
-# Env vars: TOKEN (required), TENOR_API_KEY (opt), GIPHY_API_KEY (opt),
-#          WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt), DEBUG_FETCH (opt true/1),
-#          TRUE_RANDOM (opt true/1)
-# Optional: DISCORD_MAX_UPLOAD (bytes)
-#
-# Notes:
-# - This script preserves your main GIF_TAGS seed list (so your general tastes remain).
-# - Provider-specific term pools have been aligned to each provider's realistic categories
-#   (so provider requests are more likely to succeed and be varied).
-# - Illegal/prohibited checks remain unchanged and enforced.
-# - Round-robin cycling (or TRUE_RANDOM) ensures providers don't dominate.
-# - HEAD + limited GET flow gives a reliable attach-vs-link fallback for Discord's 8MB limit.
-
 import os
 import io
 import json
@@ -28,7 +12,6 @@ import discord
 from discord.ext import commands, tasks
 from collections import deque
 
-# ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
 GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
@@ -53,16 +36,13 @@ MAX_USED_GIFS_PER_USER = 1000
 FETCH_ATTEMPTS = 40
 REQUEST_TIMEOUT = 14
 
-# default Discord upload limit: 8MB (override with DISCORD_MAX_UPLOAD env)
 DISCORD_MAX_UPLOAD = int(os.getenv("DISCORD_MAX_UPLOAD", str(8 * 1024 * 1024)))
 HEAD_SIZE_LIMIT = DISCORD_MAX_UPLOAD
 DEFAULT_HEADERS = {"User-Agent": "spiciest-bot/1.0 (+https://github.com/)"}
 
-# ---------------- Logging ----------------
 logging.basicConfig(level=logging.DEBUG if DEBUG_FETCH else logging.INFO)
 logger = logging.getLogger("spiciest-final-fixed")
 
-# ---------------- Safety lists (unchanged) ----------------
 _seed_gif_tags = [
     "busty","big breasts","oppai","huge breasts","big boobs",
     "milf","mommy","mature","thick","thicc","thick thighs","thighs","thighfocus",
@@ -80,7 +60,6 @@ ILLEGAL_TAGS = [
 FILENAME_BLOCK_KEYWORDS = ["orgy","creampie","facial","scat","fisting","bestiality"]
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
 
-# ---------------- Helpers ----------------
 def _normalize_text(s: str) -> str:
     return "" if not s else re.sub(r'[\s\-_]+', ' ', s.lower())
 
@@ -122,7 +101,6 @@ def _tag_is_disallowed(t: str) -> bool:
         return True
     return False
 
-# ---------------- Data file init ----------------
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({
@@ -149,14 +127,12 @@ GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowe
 if not GIF_TAGS:
     GIF_TAGS = ["waifu"]
 
-# Normalize provider weights (if present) to 1 unless user explicitly set 0
 default_providers = [
     "waifu_pics","waifu_im","waifu_it","nekos_best","nekos_life",
     "nekos_moe","otakugifs","animegirls_online","tenor","giphy","nekoapi"
 ]
 for prov in default_providers:
     if data.get("provider_weights", {}).get(prov, None) == 0:
-        # intentionally disabled by user
         continue
     data.setdefault("provider_weights", {})[prov] = 1
 
@@ -208,7 +184,6 @@ def extract_and_add_tags_from_meta(meta_text: str):
         if not tok or tok.isdigit() or len(tok) < 3: continue
         add_tag_to_gif_tags(tok)
 
-# ---------------- HTTP helpers ----------------
 async def _head_url(session, url, timeout=REQUEST_TIMEOUT):
     try:
         async with session.head(url, timeout=timeout, headers=DEFAULT_HEADERS, allow_redirects=True) as resp:
@@ -243,50 +218,36 @@ async def _download_bytes_with_limit(session, url, size_limit=HEAD_SIZE_LIMIT, t
             logger.debug(f"GET exception for {url}: {e}")
         return None, None
 
-# ---------------- Provider-specific term pools (aligned to provider capabilities) ----------------
-# Note: GIF_TAGS seed remains unchanged (so your broad preferences remain), but
-# providers will be queried using the pools below to maximize successful varied results.
-
-# waifu.pics NSFW endpoints: use only supported NSFW categories
 WAIFU_PICS_TERMS = ["neko", "waifu", "trap", "blowjob"]
 
-# waifu.im: include known NSFW-ish tags plus some safe versatile ones
 WAIFU_IM_TERMS = [
     "waifu", "maid", "ero", "ecchi", "hentai", "milf", "ass", "oral", "paizuri",
     "oppai", "underboob", "cleavage"
 ]
 
-# waifu.it: only 'waifu' and 'husbando' endpoints (keep minimal & valid)
 WAIFU_IT_TERMS = ["waifu", "husbando"]
 
-# nekos.best: real categories + common gif actions
 NEKOS_BEST_TERMS = [
     "husbando", "kitsune", "neko", "waifu",
     "kiss", "hug", "cuddle", "pat", "wink", "smug", "dance"
 ]
 
-# nekos.life: keep common endpoints that exist (safe selection)
 NEKOS_LIFE_TERMS = [
     "neko", "ngif", "lewd", "feet", "holo", "pat", "kiss", "hug"
 ]
 
-# nekos.moe: booru-like tag usage (examples: bikini, breasts, swimsuit)
 NEKOS_MOE_TERMS = [
     "bikini", "swimsuit", "breasts", "panties", "blush", "waifu", "thighs", "stockings"
 ]
 
-# nekoapi (if used) - conservative set
 NEKOAPI_TERMS = [
     "waifu", "neko", "oppai", "bikini", "thighs", "panties", "stockings"
 ]
 
-# otakugifs: reaction-style tags (valid)
 OTAKUGIFS_TERMS = ["kiss", "hug", "slap", "punch", "wink", "dance", "cuddle", "poke"]
 
-# animegirls.online: mostly SFW/cute tags (still useful)
 ANIMEGIRLS_TERMS = ["waifu", "bikini", "cosplay", "maid", "school uniform", "swimsuit", "cute"]
 
-# Tenor / Giphy: search phrases tuned to "spicy" anime keywords
 TENOR_TERMS = [
     "busty anime", "big breasts anime", "oppai anime", "cleavage anime", "lingerie anime",
     "bikini anime", "thighs anime", "stockings anime", "booty anime", "ecchi anime",
@@ -312,22 +273,17 @@ PROVIDER_TERMS = {
     "giphy": GIPHY_TERMS
 }
 
-# ---------------- Tag -> provider mapping ----------------
 def map_tag_for_provider(provider: str, tag: str) -> str:
     t = (tag or "").lower().strip()
     pool = PROVIDER_TERMS.get(provider, [])
-    # Prefer an exact match if the incoming tag contains a pool item
     if t:
         for p in pool:
             if p in t:
                 return p
-    # Otherwise pick a pool term (so providers get queries they actually support)
     if pool:
         return random.choice(pool)
-    # fallback
     return t or "waifu"
 
-# ------------------ FETCHERS (return gif_url, name_hint, meta) ------------------
 async def fetch_from_waifu_pics(session, positive):
     try:
         category = map_tag_for_provider("waifu_pics", positive)
@@ -587,7 +543,6 @@ async def fetch_from_giphy(session, positive):
             logger.debug(f"fetch_from_giphy error: {e}")
         return None, None, None
 
-# ---------------- Provider registry ----------------
 PROVIDER_FETCHERS = {
     "waifu_pics": fetch_from_waifu_pics,
     "waifu_im": fetch_from_waifu_im,
@@ -595,14 +550,13 @@ PROVIDER_FETCHERS = {
     "nekos_best": fetch_from_nekos_best,
     "nekos_life": fetch_from_nekos_life,
     "nekos_moe": fetch_from_nekos_moe,
-    "nekoapi": fetch_from_nekos_moe,           # fallback to nekos.moe handler when nekoapi isn't available
+    "nekoapi": fetch_from_nekos_moe,
     "otakugifs": fetch_from_otakugifs,
     "animegirls_online": fetch_from_animegirls_online,
     "tenor": fetch_from_tenor,
     "giphy": fetch_from_giphy
 }
 
-# ---------------- Provider cycling fairness ----------------
 _provider_cycle_deque = deque()
 _last_cycle_refresh = None
 
@@ -643,7 +597,6 @@ def build_provider_pool():
                 logger.debug(f"Provider cycle (rebuild): {_provider_cycle_deque}")
     return list(_provider_cycle_deque)
 
-# ---------------- Reliability: HEAD+GET ----------------
 async def attempt_get_media_bytes(session, gif_url):
     if not gif_url:
         return None, None, "no-url"
@@ -682,7 +635,6 @@ async def attempt_get_media_bytes(session, gif_url):
             return b, ctype2 or ctype, "downloaded-unknown-size"
         return None, ctype2 or ctype, "unknown-size-get-failed-or-too-large"
 
-# ---------------- FETCH_GIF improved flow ----------------
 async def fetch_gif(user_id):
     user_key = str(user_id)
     sent = data["sent_history"].setdefault(user_key, [])
@@ -717,7 +669,6 @@ async def fetch_gif(user_id):
                     logger.debug(f"No fetcher for provider {provider}")
                 continue
 
-            # pick a tag: prefer provider term pools (ensures provider-specific categories used)
             provider_pool = PROVIDER_TERMS.get(provider, None)
             if provider_pool:
                 positive = random.choice(provider_pool)
@@ -777,7 +728,6 @@ async def fetch_gif(user_id):
                 persist_all_data()
                 return b, name, gif_url
             else:
-                # link-only fallback
                 sent.append(gif_hash)
                 if len(sent) > MAX_USED_GIFS_PER_USER:
                     del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
@@ -789,7 +739,6 @@ async def fetch_gif(user_id):
             logger.debug("fetch_gif exhausted attempts.")
         return None, None, None
 
-# ---------------- Discord helpers ----------------
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.dark_red() if kind == "join" else discord.Color.dark_gray()
     embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
@@ -843,7 +792,7 @@ async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name
                 if gif_url:
                     if gif_url not in (dm_embed.description or ""):
                         dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
-                await member.send(embed=dm_embed)
+                await member.send(dm_embed)
             except Exception as e:
                 logger.debug(f"DM link only failed: {e}")
     except Exception as e:
@@ -855,7 +804,6 @@ async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name
         except Exception:
             logger.debug("final fallback failed")
 
-# ---------------- Discord events/messages ----------------
 JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
     "✨ {display_name} arrived and the room got a whole lot warmer.",
@@ -1035,7 +983,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     autosave_task.start()
-    # startup provider report
     available = []
     for p in PROVIDER_FETCHERS.keys():
         key_ok = True
@@ -1053,7 +1000,6 @@ async def on_voice_state_update(member, before, after):
     if member.bot:
         return
     text_channel = bot.get_channel(VC_CHANNEL_ID)
-    # Auto-join
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         try:
             vc = discord.utils.get(bot.voice_clients, guild=member.guild)
@@ -1065,7 +1011,6 @@ async def on_voice_state_update(member, before, after):
         except Exception as e:
             logger.warning(f"VC join error: {e}")
 
-    # JOIN message
     if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
         raw = random.choice(JOIN_GREETINGS)
         msg = raw.format(display_name=member.display_name)
@@ -1074,7 +1019,6 @@ async def on_voice_state_update(member, before, after):
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
         await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url)
 
-    # LEAVE message
     if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
         raw = random.choice(LEAVE_GREETINGS)
         msg = raw.format(display_name=member.display_name)
