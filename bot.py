@@ -1,8 +1,13 @@
-# bot_spiciest_final_full_nsfw_expanded_terms_random_roundrobin_with_reliability.py
-# NSFW bot with expanded provider-specific spicy tag pools (20-30 each).
+# bot_spiciest_final_full_nsfw_expanded_terms_random_roundrobin_fixed.py
+# Final full script (A → Z). Addresses:
+#  - true round-robin provider cycling so one provider (e.g. giphy) can't dominate
+#  - robust download fallback (HEAD/GET) so gif link fallback works when attachment download fails
+#  - better provider fairness: cycle providers deterministically while allowing reshuffle between cycles
+#  - more informative logging for debugging why a GIF failed
 # STILL blocks illegal content (minors, bestiality, sexual violence, etc.).
-# Env vars: TOKEN, TENOR_API_KEY (opt), GIPHY_API_KEY (opt), WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt)
-# Optional env vars: DEBUG_FETCH (true/1), DISCORD_MAX_UPLOAD (bytes, default 8MB)
+# Env vars: TOKEN (required), TENOR_API_KEY (opt), GIPHY_API_KEY (opt),
+#           WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt), DEBUG_FETCH (opt true/1)
+# Optional env: DISCORD_MAX_UPLOAD (bytes), TRUE_RANDOM (if "1"/"true" then ignore cycling and choose uniformly)
 # Requirements: aiohttp, discord.py
 
 import os
@@ -12,11 +17,12 @@ import random
 import hashlib
 import logging
 import re
-from datetime import datetime
-from urllib.parse import quote_plus
+from datetime import datetime, timedelta
+from urllib.parse import quote_plus, urlparse
 import aiohttp
 import discord
 from discord.ext import commands, tasks
+from collections import deque
 
 # ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
@@ -27,6 +33,8 @@ WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY")  # Waifu.it token
 
 _DEBUG_RAW = os.getenv("DEBUG_FETCH", "")
 DEBUG_FETCH = str(_DEBUG_RAW).strip().lower() in ("1", "true", "yes", "on")
+
+TRUE_RANDOM = str(os.getenv("TRUE_RANDOM", "")).strip().lower() in ("1", "true", "yes")
 
 VC_IDS = [
     1353875050809524267,
@@ -39,17 +47,23 @@ VC_CHANNEL_ID = 1371916812903780573
 DATA_FILE = "data.json"
 AUTOSAVE_INTERVAL = 30
 MAX_USED_GIFS_PER_USER = 1000
-FETCH_ATTEMPTS = 30
+FETCH_ATTEMPTS = 40    # try more attempts to allow cycling through many providers
 REQUEST_TIMEOUT = 14
 
 # Max size to attempt to upload to Discord (bytes). Default 8MB. Set DISCORD_MAX_UPLOAD env to change.
 DISCORD_MAX_UPLOAD = int(os.getenv("DISCORD_MAX_UPLOAD", str(8 * 1024 * 1024)))
 
-# -------- Provider fairness state (added) --------
-PROVIDER_CYCLE = []
-PROVIDER_USED_THIS_CYCLE = set()
+# HEAD/GET content-size cutoff for streaming vs download; if unknown, attempt small read then fallback to link
+HEAD_SIZE_LIMIT = DISCORD_MAX_UPLOAD
 
-# ---------------- TAGS & BLOCK LISTS ----------------
+# Default User-Agent for requests (helps providers that block default aiohttp UA)
+DEFAULT_HEADERS = {"User-Agent": "spiciest-bot/1.0 (+https://github.com/)"}
+
+# ---------------- Logging ----------------
+logging.basicConfig(level=logging.DEBUG if DEBUG_FETCH else logging.INFO)
+logger = logging.getLogger("spiciest-nsfw-fixed")
+
+# ---------------- Safety lists ----------------
 _seed_gif_tags = [
     "busty","big breasts","oppai","huge breasts","big boobs",
     "milf","mommy","mature","thick","thicc","thick thighs","thighs","thighfocus",
@@ -67,10 +81,6 @@ ILLEGAL_TAGS = [
 
 FILENAME_BLOCK_KEYWORDS = ["orgy","creampie","facial","scat","fisting","bestiality"]
 EXCLUDE_TAGS = ["loli","shota","child","minor","underage","young","schoolgirl","age_gap"]
-
-# ---------------- Logging ----------------
-logging.basicConfig(level=logging.DEBUG if DEBUG_FETCH else logging.INFO)
-logger = logging.getLogger("spiciest-nsfw-expanded")
 
 # ---------------- Helpers ----------------
 def _normalize_text(s: str) -> str:
@@ -158,10 +168,6 @@ async def autosave_task():
         logger.warning(f"Autosave failed: {e}")
 
 def save_data():
-    """
-    Save lightweight derived data (gif tags) — used by many earlier functions.
-    The main persistent write for sent_history is done inline where needed to avoid losing it.
-    """
     try:
         data["gif_tags"] = GIF_TAGS
         with open(DATA_FILE, "w") as f:
@@ -170,7 +176,6 @@ def save_data():
         logger.warning(f"Failed to save data: {e}")
 
 def persist_all_data():
-    """Write the whole data dict to disk (used after modifying sent_history)."""
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -197,23 +202,49 @@ def extract_and_add_tags_from_meta(meta_text: str):
         if not tok or tok.isdigit() or len(tok) < 3: continue
         add_tag_to_gif_tags(tok)
 
-async def _download_url(session, url, timeout=REQUEST_TIMEOUT):
+# ---------------- HTTP helpers: HEAD then GET if safe ----------------
+async def _head_url(session, url, timeout=REQUEST_TIMEOUT):
     try:
-        async with session.get(url, timeout=timeout) as resp:
+        async with session.head(url, timeout=timeout, headers=DEFAULT_HEADERS, allow_redirects=True) as resp:
+            # Some servers don't support HEAD -> status 405 etc
+            return resp.status, dict(resp.headers)
+    except Exception as e:
+        if DEBUG_FETCH:
+            logger.debug(f"HEAD failed for {url}: {e}")
+        return None, {}
+
+async def _download_bytes_with_limit(session, url, size_limit=HEAD_SIZE_LIMIT, timeout=REQUEST_TIMEOUT):
+    """
+    Try to download at most size_limit bytes. If the resource is larger or fails, return None.
+    This function streams content and stops if limit exceeded.
+    """
+    try:
+        async with session.get(url, timeout=timeout, headers=DEFAULT_HEADERS, allow_redirects=True) as resp:
             if resp.status != 200:
-                logger.debug(f"_download_url got {resp.status} for {url}")
+                if DEBUG_FETCH:
+                    logger.debug(f"GET {url} returned {resp.status}")
                 return None, None
             ctype = resp.content_type or ""
-            if "html" in ctype:
-                logger.debug(f"download_url: html content, skipping {url}")
-                return None, None
-            b = await resp.read()
-            return b, ctype
+            # stream in chunks
+            total = 0
+            chunks = []
+            async for chunk in resp.content.iter_chunked(1024):
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > size_limit:
+                    # too large - abort
+                    if DEBUG_FETCH:
+                        logger.debug(f"download exceeded limit {size_limit} for {url}")
+                    return None, ctype
+            return b"".join(chunks), ctype
     except Exception as e:
-        logger.debug(f"_download_url exception {e} for {url}")
+        if DEBUG_FETCH:
+            logger.debug(f"GET exception for {url}: {e}")
         return None, None
 
-# ---------------- Expanded provider-specific spicy term pools (20-30 each) ----------------
+# ---------------- Expanded provider-specific spicy term pools ----------------
 WAIFU_PICS_TERMS = [
     "oppai","busty","big breasts","huge breasts","underboob","sideboob",
     "lingerie","panties","thong","pantyhose","stockings","garter",
@@ -289,7 +320,6 @@ GIPHY_TERMS = [
     "jiggle","bounce","peekaboo","playful","seductive"
 ]
 
-# Provider-term lookup dict
 PROVIDER_TERMS = {
     "waifu_pics": WAIFU_PICS_TERMS,
     "waifu_im": WAIFU_IM_TERMS,
@@ -304,29 +334,27 @@ PROVIDER_TERMS = {
     "giphy": GIPHY_TERMS
 }
 
-# ---------------- Tag -> provider mapping (uses expanded pools) ----------------
+# ---------------- Tag -> provider mapping ----------------
 def map_tag_for_provider(provider: str, tag: str) -> str:
     t = (tag or "").lower().strip()
     pool = PROVIDER_TERMS.get(provider, [])
-    # 1) If user's tag contains any pool term, prefer that exact term
     for p in pool:
         if p in t:
             return p
-    # 2) If tag itself seems reasonable and not illegal, return it
     if t and not contains_illegal_indicators(t):
         return t
-    # 3) Otherwise randomly pick a pool term to maximize coverage
     if pool:
         return random.choice(pool)
     return t or "waifu"
 
 # ------------------ FETCHERS (NSFW) ------------------
-# Each fetcher applies ILLEGAL_TAGS and filename block checks
+# fetchers now return (gif_url, canonical_name_hint, meta_dict_or_none)
+# They DON'T attempt to fully download the binary; fetch_gif will decide whether to download the bytes.
 async def fetch_from_waifu_pics(session, positive):
     try:
         category = map_tag_for_provider("waifu_pics", positive)
         url = f"https://api.waifu.pics/nsfw/{quote_plus(category)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"waifu_pics nsfw {category} -> {resp.status}")
                 return None, None, None
@@ -336,11 +364,8 @@ async def fetch_from_waifu_pics(session, positive):
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (positive or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"waifu_pics_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"waifu_pics_{category}"
+            return gif_url, name_hint, payload
     except Exception as e:
         logger.debug(f"fetch_from_waifu_pics error: {e}")
         return None, None, None
@@ -350,7 +375,7 @@ async def fetch_from_waifu_im(session, positive):
         q = map_tag_for_provider("waifu_im", positive)
         base = "https://api.waifu.im/search"
         params = {"included_tags": q, "is_nsfw": "true", "limit": 5}
-        headers = {}
+        headers = dict(DEFAULT_HEADERS)
         if WAIFUIM_API_KEY:
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
         async with session.get(base, params=params, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
@@ -366,11 +391,8 @@ async def fetch_from_waifu_im(session, positive):
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(img) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(str(img.get("tags", "")))
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"waifu_im_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"waifu_im_{q}"
+            return gif_url, name_hint, img
     except Exception as e:
         logger.debug(f"fetch_from_waifu_im error: {e}")
         return None, None, None
@@ -382,7 +404,8 @@ async def fetch_from_waifu_it(session, positive):
             return None, None, None
         q = map_tag_for_provider("waifu_it", positive)
         endpoint = f"https://waifu.it/api/v4/{quote_plus(q)}"
-        headers = {"Authorization": WAIFUIT_API_KEY}
+        headers = dict(DEFAULT_HEADERS)
+        headers["Authorization"] = WAIFUIT_API_KEY
         async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
                 logger.debug(f"waifu.it {endpoint} -> {resp.status}")
@@ -393,11 +416,8 @@ async def fetch_from_waifu_it(session, positive):
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"waifu_it_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"waifu_it_{q}"
+            return gif_url, name_hint, payload
     except Exception as e:
         logger.debug(f"fetch_from_waifu_it error: {e}")
         return None, None, None
@@ -406,7 +426,7 @@ async def fetch_from_nekos_best(session, positive):
     try:
         q = map_tag_for_provider("nekos_best", positive)
         url = f"https://nekos.best/api/v2/{quote_plus(q)}?amount=1"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"nekos.best {q} -> {resp.status}")
                 return None, None, None
@@ -419,11 +439,8 @@ async def fetch_from_nekos_best(session, positive):
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(r) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(r))
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"nekos_best_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"nekos_best_{q}"
+            return gif_url, name_hint, r
     except Exception as e:
         logger.debug(f"fetch_from_nekos_best error: {e}")
         return None, None, None
@@ -432,7 +449,7 @@ async def fetch_from_nekos_life(session, positive):
     try:
         q = map_tag_for_provider("nekos_life", positive)
         url = f"https://nekos.life/api/v2/img/{quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"nekos.life {q} -> {resp.status}")
                 return None, None, None
@@ -442,11 +459,8 @@ async def fetch_from_nekos_life(session, positive):
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"nekos_life_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"nekos_life_{q}"
+            return gif_url, name_hint, payload
     except Exception as e:
         logger.debug(f"fetch_from_nekos_life error: {e}")
         return None, None, None
@@ -455,7 +469,7 @@ async def fetch_from_nekos_moe(session, positive):
     try:
         q = map_tag_for_provider("nekos_moe", positive)
         url = f"https://nekos.moe/api/v3/gif/random?tag={quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"nekos.moe -> {resp.status}")
                 return None, None, None
@@ -469,11 +483,8 @@ async def fetch_from_nekos_moe(session, positive):
             if not gif_url: return None, None, None
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): return None, None, None
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"nekos_moe_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"nekos_moe_{q}"
+            return gif_url, name_hint, item
     except Exception as e:
         logger.debug(f"fetch_from_nekos_moe error: {e}")
         return None, None, None
@@ -488,7 +499,7 @@ async def fetch_from_otakugifs(session, positive):
                 reaction = v
                 break
         url = f"https://otakugifs.xyz/api/gif?reaction={quote_plus(reaction)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"otakugifs -> {resp.status}")
                 return None, None, None
@@ -497,11 +508,8 @@ async def fetch_from_otakugifs(session, positive):
             if not gif_url: return None, None, None
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"otakugifs_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"otakugifs_{reaction}"
+            return gif_url, name_hint, payload
     except Exception as e:
         logger.debug(f"fetch_from_otakugifs error: {e}")
         return None, None, None
@@ -510,7 +518,7 @@ async def fetch_from_animegirls_online(session, positive):
     try:
         q = map_tag_for_provider("animegirls_online", positive)
         url = f"https://animegirls.online/api/random?tag={quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"animegirls_online -> {resp.status}")
                 return None, None, None
@@ -519,11 +527,8 @@ async def fetch_from_animegirls_online(session, positive):
             if not gif_url: return None, None, None
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
-            b, ctype = await _download_url(session, gif_url)
-            if not b: return None, None, None
-            ext = os.path.splitext(gif_url)[1] or ".gif"
-            name = f"animegirls_online_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-            return b, name, gif_url
+            name_hint = f"animegirls_online_{q}"
+            return gif_url, name_hint, payload
     except Exception as e:
         logger.debug(f"fetch_from_animegirls_online error: {e}")
         return None, None, None
@@ -534,7 +539,7 @@ async def fetch_from_tenor(session, positive):
     try:
         q = map_tag_for_provider("tenor", positive)
         tenor_url = f"https://g.tenor.com/v1/search?q={quote_plus(q)}&key={TENOR_API_KEY}&limit=30&contentfilter=off"
-        async with session.get(tenor_url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(tenor_url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"tenor -> {resp.status}")
                 return None, None, None
@@ -557,10 +562,8 @@ async def fetch_from_tenor(session, positive):
                 if not gif_url: continue
                 if filename_has_block_keyword(gif_url): continue
                 if contains_illegal_indicators(json.dumps(r) + " " + (q or "")): continue
-                b, ctype = await _download_url(session, gif_url)
-                if not b: continue
-                name = f"tenor_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
-                return b, name, gif_url
+                name_hint = f"tenor_{q}"
+                return gif_url, name_hint, r
     except Exception as e:
         logger.debug(f"fetch_from_tenor error: {e}")
         return None, None, None
@@ -571,7 +574,7 @@ async def fetch_from_giphy(session, positive):
     try:
         q = map_tag_for_provider("giphy", positive)
         giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={quote_plus(q)}&limit=30&rating=r"
-        async with session.get(giphy_url, timeout=REQUEST_TIMEOUT) as resp:
+        async with session.get(giphy_url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
                 logger.debug(f"giphy -> {resp.status}")
                 return None, None, None
@@ -583,10 +586,8 @@ async def fetch_from_giphy(session, positive):
                 if not gif_url: continue
                 if filename_has_block_keyword(gif_url): continue
                 if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): continue
-                b, ctype = await _download_url(session, gif_url)
-                if not b: continue
-                name = f"giphy_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}.gif"
-                return b, name, gif_url
+                name_hint = f"giphy_{q}"
+                return gif_url, name_hint, item
     except Exception as e:
         logger.debug(f"fetch_from_giphy error: {e}")
         return None, None, None
@@ -605,28 +606,234 @@ PROVIDER_FETCHERS = {
     "giphy": fetch_from_giphy
 }
 
-def build_provider_pool():
-    # TRUE RANDOM mode: ignore weights, return a shuffled list of available providers.
-    pool = list(PROVIDER_FETCHERS.keys())
-    # remove providers that require missing API keys
-    if not TENOR_API_KEY and "tenor" in pool:
-        pool.remove("tenor")
-    if not GIPHY_API_KEY and "giphy" in pool:
-        pool.remove("giphy")
-    if not WAIFUIT_API_KEY and "waifu_it" in pool:
-        pool.remove("waifu_it")
-    random.shuffle(pool)
-    return pool
+# ---------------- Provider cycling fairness ----------------
+_provider_cycle_deque = deque()  # persistent in-memory cycle order
+_last_cycle_refresh = None
 
-# ---------------- Reliability helper: send embed + media with robust fallback ----------------
+def build_provider_pool():
+    """
+    Build available provider list.
+    - If TRUE_RANDOM: return shuffled list (uniform random choice later).
+    - Otherwise return deque for round-robin cycling.
+    """
+    providers = [p for p in PROVIDER_FETCHERS.keys()]
+    # filter providers that require missing API keys
+    if "tenor" in providers and not TENOR_API_KEY:
+        providers.remove("tenor")
+    if "giphy" in providers and not GIPHY_API_KEY:
+        providers.remove("giphy")
+    if "waifu_it" in providers and not WAIFUIT_API_KEY:
+        providers.remove("waifu_it")
+    # also allow zero-weight exclusion from data if user sets provider_weights to 0
+    available = []
+    for p in providers:
+        w = int(data.get("provider_weights", {}).get(p, 1))
+        if w <= 0:
+            continue
+        available.append(p)
+    if not available:
+        return []
+    if TRUE_RANDOM:
+        random.shuffle(available)
+        return available
+    # maintain global deque: if empty or changed, create new shuffled deque
+    global _provider_cycle_deque, _last_cycle_refresh
+    now = datetime.utcnow()
+    if not _provider_cycle_deque or (_last_cycle_refresh and (now - _last_cycle_refresh) > timedelta(minutes=15)):
+        random.shuffle(available)
+        _provider_cycle_deque = deque(available)
+        _last_cycle_refresh = now
+        if DEBUG_FETCH:
+            logger.debug(f"Provider cycle (refreshed): {_provider_cycle_deque}")
+    else:
+        # ensure deque contents match available (maybe keys changed)
+        current = list(_provider_cycle_deque)
+        if set(current) != set(available):
+            # rebuild shuffled
+            random.shuffle(available)
+            _provider_cycle_deque = deque(available)
+            _last_cycle_refresh = now
+            if DEBUG_FETCH:
+                logger.debug(f"Provider cycle (rebuild): {_provider_cycle_deque}")
+    return list(_provider_cycle_deque)
+
+# ---------------- Reliability: download-once-if-possible flow ----------------
+async def attempt_get_media_bytes(session, gif_url):
+    """Try HEAD to determine content-length then GET (limited).
+       Returns (bytes_or_None, content_type_or_None, reason_str)"""
+    if not gif_url:
+        return None, None, "no-url"
+    if contains_illegal_indicators(gif_url):
+        return None, None, "illegal-indicator-in-url"
+    # HEAD first
+    status, headers = await _head_url(session, gif_url)
+    if status is None:
+        # HEAD failed; try a limited GET
+        b, ctype = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
+        if b:
+            return b, ctype, "downloaded-after-head-failed"
+        return None, ctype, "head-failed-get-failed"
+    # If HEAD returned non-200, still try GET sometimes (some CDNs return 403 on HEAD)
+    if status not in (200, 302, 301):
+        # Attempt GET as fallback
+        b, ctype = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
+        if b:
+            return b, ctype, f"get-after-head-{status}"
+        return None, ctype, f"head-{status}-get-failed"
+    # HEAD OK: check content-length
+    cl = headers.get("Content-Length") or headers.get("content-length")
+    ctype = headers.get("Content-Type") or headers.get("content-type") or ""
+    if cl:
+        try:
+            clv = int(cl)
+            if clv > HEAD_SIZE_LIMIT:
+                return None, ctype, f"too-large-head-{clv}"
+            # safe to GET full content
+            b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
+            if b:
+                return b, ctype2 or ctype, "downloaded-with-head-size"
+            return None, ctype2 or ctype, "head-said-small-but-get-failed"
+        except Exception:
+            # parse error: fallback to limited GET
+            b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
+            if b:
+                return b, ctype2 or ctype, "downloaded-with-head-parse-except"
+            return None, ctype2 or ctype, "head-parse-get-failed"
+    else:
+        # Unknown size: attempt limited GET; if it exceeds limit, function returns None
+        b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
+        if b:
+            return b, ctype2 or ctype, "downloaded-unknown-size"
+        return None, ctype2 or ctype, "unknown-size-get-failed-or-too-large"
+
+# ---------------- FETCH_GIF: improved flow ----------------
+async def fetch_gif(user_id):
+    """
+    1) cycle through providers fairly (deque round-robin) or randomly (TRUE_RANDOM)
+    2) call provider fetcher -> returns gif_url,name_hint,meta
+    3) validate url, try to fetch bytes using HEAD+limited GET (so we only attach if not too big)
+    4) if bytes available -> return bytes,name, gif_url
+       else return None, None, gif_url (so caller can still embed link)
+    """
+    user_key = str(user_id)
+    sent = data["sent_history"].setdefault(user_key, [])
+
+    providers = build_provider_pool()
+    if not providers:
+        if DEBUG_FETCH:
+            logger.debug("No providers available (missing API keys or weights).")
+        return None, None, None
+
+    # We'll iterate attempts; we ensure we try different providers in a cycle fashion.
+    async with aiohttp.ClientSession() as session:
+        # prepare ordering: if TRUE_RANDOM pick uniformly each attempt; else pop left and append right (round-robin)
+        tried_providers = set()
+        attempt = 0
+        while attempt < FETCH_ATTEMPTS:
+            attempt += 1
+            if TRUE_RANDOM:
+                provider = random.choice(providers)
+            else:
+                # rotate the global deque deterministically so providers are used equally
+                global _provider_cycle_deque, _last_cycle_refresh
+                if not _provider_cycle_deque:
+                    # rebuild if empty
+                    _provider_cycle_deque = deque(build_provider_pool())
+                if not _provider_cycle_deque:
+                    return None, None, None
+                provider = _provider_cycle_deque.popleft()
+                _provider_cycle_deque.append(provider)  # move to back -> round-robin
+                if DEBUG_FETCH:
+                    logger.debug(f"Round-robin provider chosen: {provider}")
+
+            # Keep track so we can break out if all providers tried in this attempt-window
+            tried_providers.add(provider)
+            fetcher = PROVIDER_FETCHERS.get(provider)
+            if not fetcher:
+                if DEBUG_FETCH:
+                    logger.debug(f"No fetcher for provider {provider}")
+                continue
+
+            try:
+                gif_url, name_hint, meta = await fetcher(session, random.choice(GIF_TAGS))
+            except Exception as e:
+                if DEBUG_FETCH:
+                    logger.debug(f"Fetcher exception for {provider}: {e}")
+                continue
+
+            if not gif_url:
+                if DEBUG_FETCH:
+                    logger.debug(f"{provider} returned no url.")
+                # provider failed -> continue to next provider
+                if len(tried_providers) >= len(providers):
+                    # reshuffle providers if all tried in this cycle
+                    tried_providers.clear()
+                continue
+
+            if filename_has_block_keyword(gif_url):
+                if DEBUG_FETCH:
+                    logger.debug(f"{provider} returned blocked filename keyword in {gif_url}")
+                continue
+            if contains_illegal_indicators((gif_url or "") + " " + (str(meta) or "")):
+                if DEBUG_FETCH:
+                    logger.debug(f"{provider} returned illegal indicators in meta/url for {gif_url}")
+                continue
+
+            # dedupe by url hash
+            gif_hash = hashlib.sha1((gif_url or name_hint or "").encode()).hexdigest()
+            if gif_hash in sent:
+                if DEBUG_FETCH:
+                    logger.debug(f"Already sent gif hash for {gif_url}; skipping.")
+                continue
+
+            # Attempt to fetch bytes but only if reasonably sized
+            b, ctype, reason = await attempt_get_media_bytes(session, gif_url)
+            if DEBUG_FETCH:
+                logger.debug(f"attempt_get_media_bytes -> provider={provider} url={gif_url} reason={reason} bytes_ok={bool(b)} ctype={ctype}")
+            # Even if bytes aren't available, we can still return link so embed fallback shows it.
+            # But prefer bytes when available (attachment) because it shows inline reliably.
+            if b:
+                # create a filename safe extension
+                ext = ""
+                try:
+                    parsed = urlparse(gif_url)
+                    ext = os.path.splitext(parsed.path)[1] or ".gif"
+                    if len(ext) > 6:
+                        ext = ".gif"
+                except Exception:
+                    ext = ".gif"
+                name = f"{provider}_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
+                # record sent and persist
+                sent.append(gif_hash)
+                if len(sent) > MAX_USED_GIFS_PER_USER:
+                    del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
+                data["sent_history"][user_key] = sent
+                persist_all_data()
+                return b, name, gif_url
+            else:
+                # no bytes but valid link -> record and return link-only (caller will embed link)
+                sent.append(gif_hash)
+                if len(sent) > MAX_USED_GIFS_PER_USER:
+                    del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
+                data["sent_history"][user_key] = sent
+                persist_all_data()
+                return None, None, gif_url
+
+        # If we reach here, attempts exhausted
+        if DEBUG_FETCH:
+            logger.debug("fetch_gif exhausted attempts without success.")
+        return None, None, None
+
+# ---------------- Discord helpers ----------------
 async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url):
     """
-    Try to send embed+attachment (if size ok). If attachment fails or too large,
+    Try to send embed+attachment (if bytes and size ok). If attachment fails or too large,
     send embed with external gif_url as fallback. Also try DM; if DM fails, DM link-only embed.
     """
     max_upload = DISCORD_MAX_UPLOAD
     # try send to channel
     try:
+        # If we have bytes and they are within upload limit, attach
         if gif_bytes and len(gif_bytes) <= max_upload:
             try:
                 file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
@@ -638,7 +845,6 @@ async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name
                 # fallback to link embed
                 if text_channel:
                     if gif_url:
-                        # avoid duplicating link if already present
                         if gif_url not in (embed.description or ""):
                             embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
                     await text_channel.send(embed=embed)
@@ -681,66 +887,6 @@ async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name
             await member.send(embed=embed)
         except Exception:
             logger.debug("[send_embed_with_media] final fallback also failed")
-
-# ------------------ FETCH_GIF (REPLACED: provider-cycle fairness) ------------------
-async def fetch_gif(user_id):
-    global PROVIDER_CYCLE, PROVIDER_USED_THIS_CYCLE
-
-    user_key = str(user_id)
-    sent = data["sent_history"].setdefault(user_key, [])
-
-    # Start a new provider cycle if needed
-    if not PROVIDER_CYCLE or len(PROVIDER_USED_THIS_CYCLE) >= len(PROVIDER_CYCLE):
-        PROVIDER_CYCLE = build_provider_pool()
-        PROVIDER_USED_THIS_CYCLE.clear()
-
-    if not PROVIDER_CYCLE:
-        return None, None, None
-
-    async with aiohttp.ClientSession() as session:
-        for attempt in range(FETCH_ATTEMPTS):
-            # Only pick providers NOT yet used in this cycle
-            available = [p for p in PROVIDER_CYCLE if p not in PROVIDER_USED_THIS_CYCLE]
-            if not available:
-                break
-
-            provider = random.choice(available)
-            PROVIDER_USED_THIS_CYCLE.add(provider)
-
-            positive = random.choice(GIF_TAGS)
-            if DEBUG_FETCH:
-                logger.debug(f"[fetch_gif] attempt {attempt+1}/{FETCH_ATTEMPTS} provider={provider} tag='{positive}'")
-
-            fetcher = PROVIDER_FETCHERS.get(provider)
-            if not fetcher:
-                continue
-
-            try:
-                b, name, gif_url = await fetcher(session, positive)
-            except Exception as e:
-                logger.debug(f"fetcher {provider} error: {e}")
-                continue
-
-            if not b or not gif_url:
-                continue
-            if filename_has_block_keyword(gif_url):
-                continue
-            if contains_illegal_indicators(gif_url + " " + (positive or "")):
-                continue
-
-            gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
-            if gif_hash in sent:
-                continue
-
-            # record and persist sent history (immediately)
-            sent.append(gif_hash)
-            if len(sent) > MAX_USED_GIFS_PER_USER:
-                del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
-            data["sent_history"][user_key] = sent
-            persist_all_data()
-            return b, name, gif_url
-
-    return None, None, None
 
 # ---------------- Discord events/messages ----------------
 JOIN_GREETINGS = [
@@ -959,7 +1105,6 @@ async def on_voice_state_update(member, before, after):
         data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
         embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-        # Use robust send helper
         await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url)
 
     # LEAVE message
@@ -968,7 +1113,6 @@ async def on_voice_state_update(member, before, after):
         msg = raw.format(display_name=member.display_name)
         embed = make_embed("Goodbye!", msg, member, "leave")
         gif_bytes, gif_name, gif_url = await fetch_gif(member.id)
-        # Use robust send helper
         await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url)
 
         # disconnect if empty
