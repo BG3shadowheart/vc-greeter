@@ -1,10 +1,18 @@
-# bot_spiciest_final_all_in_one.py
+# bot_spiciest_final_all_in_one_fixed.py
 # Final consolidated NSFW spiciest bot (round-robin / provider-term priority)
 # Requirements: aiohttp, discord.py
 # Env vars: TOKEN (required), TENOR_API_KEY (opt), GIPHY_API_KEY (opt),
 #          WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt), DEBUG_FETCH (opt true/1),
 #          TRUE_RANDOM (opt true/1)
 # Optional: DISCORD_MAX_UPLOAD (bytes)
+#
+# Notes:
+# - This script preserves your main GIF_TAGS seed list (so your general tastes remain).
+# - Provider-specific term pools have been aligned to each provider's realistic categories
+#   (so provider requests are more likely to succeed and be varied).
+# - Illegal/prohibited checks remain unchanged and enforced.
+# - Round-robin cycling (or TRUE_RANDOM) ensures providers don't dominate.
+# - HEAD + limited GET flow gives a reliable attach-vs-link fallback for Discord's 8MB limit.
 
 import os
 import io
@@ -45,15 +53,16 @@ MAX_USED_GIFS_PER_USER = 1000
 FETCH_ATTEMPTS = 40
 REQUEST_TIMEOUT = 14
 
+# default Discord upload limit: 8MB (override with DISCORD_MAX_UPLOAD env)
 DISCORD_MAX_UPLOAD = int(os.getenv("DISCORD_MAX_UPLOAD", str(8 * 1024 * 1024)))
 HEAD_SIZE_LIMIT = DISCORD_MAX_UPLOAD
 DEFAULT_HEADERS = {"User-Agent": "spiciest-bot/1.0 (+https://github.com/)"}
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.DEBUG if DEBUG_FETCH else logging.INFO)
-logger = logging.getLogger("spiciest-final")
+logger = logging.getLogger("spiciest-final-fixed")
 
-# ---------------- Safety lists ----------------
+# ---------------- Safety lists (unchanged) ----------------
 _seed_gif_tags = [
     "busty","big breasts","oppai","huge breasts","big boobs",
     "milf","mommy","mature","thick","thicc","thick thighs","thighs","thighfocus",
@@ -140,12 +149,14 @@ GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowe
 if not GIF_TAGS:
     GIF_TAGS = ["waifu"]
 
-# Normalize persisted provider weights to 1 unless user explicitly set 0
-# This prevents old high weights (e.g. giphy) from dominating.
-default_providers = ["waifu_pics","waifu_im","waifu_it","nekos_best","nekos_life","nekos_moe","otakugifs","animegirls_online","tenor","giphy"]
+# Normalize provider weights (if present) to 1 unless user explicitly set 0
+default_providers = [
+    "waifu_pics","waifu_im","waifu_it","nekos_best","nekos_life",
+    "nekos_moe","otakugifs","animegirls_online","tenor","giphy","nekoapi"
+]
 for prov in default_providers:
     if data.get("provider_weights", {}).get(prov, None) == 0:
-        # keep disabled intentionally
+        # intentionally disabled by user
         continue
     data.setdefault("provider_weights", {})[prov] = 1
 
@@ -232,80 +243,59 @@ async def _download_bytes_with_limit(session, url, size_limit=HEAD_SIZE_LIMIT, t
             logger.debug(f"GET exception for {url}: {e}")
         return None, None
 
-# ---------------- Provider-specific term pools ----------------
-WAIFU_PICS_TERMS = [
-    "oppai","busty","big breasts","huge breasts","underboob","sideboob",
-    "lingerie","panties","thong","pantyhose","stockings","garter",
-    "bikini","swimsuit","beach","cleavage","lowcut","crop top","corset",
-    "thighs","thighfocus","booty","big ass","curvy","seductive","teasing",
-    "blush","wink","kiss","cuddle","playful"
-]
+# ---------------- Provider-specific term pools (aligned to provider capabilities) ----------------
+# Note: GIF_TAGS seed remains unchanged (so your broad preferences remain), but
+# providers will be queried using the pools below to maximize successful varied results.
 
+# waifu.pics NSFW endpoints: use only supported NSFW categories
+WAIFU_PICS_TERMS = ["neko", "waifu", "trap", "blowjob"]
+
+# waifu.im: include known NSFW-ish tags plus some safe versatile ones
 WAIFU_IM_TERMS = [
-    "busty","oppai","cleavage","lingerie","panties","underwear","pantie",
-    "thighs","stockings","booty","bikini","swimsuit","brazilian","micro bikini",
-    "crop top","corset","latex","sexy cosplay","maid outfit","school uniform","cheerleader",
-    "underboob","sideboob","nip slip","peekaboo","soft erotic","flirty","seductive"
+    "waifu", "maid", "ero", "ecchi", "hentai", "milf", "ass", "oral", "paizuri",
+    "oppai", "underboob", "cleavage"
 ]
 
-WAIFU_IT_TERMS = [
-    "waifu","oppai","busty","bikini","lingerie","thighs","stockings","garter",
-    "panties","cosplay","maid","school uniform","cheerleader","cute waifu","hot waifu",
-    "big boobs","big ass","booty shake","thighfocus","underboob","sideboob",
-    "underwear","seductive pose","playful tease","blush","wink","cuddle","kiss"
-]
+# waifu.it: only 'waifu' and 'husbando' endpoints (keep minimal & valid)
+WAIFU_IT_TERMS = ["waifu", "husbando"]
 
+# nekos.best: real categories + common gif actions
 NEKOS_BEST_TERMS = [
-    "waifu","neko","oppai","busty","hug","kiss","cuddle","smug","pat",
-    "bikini","lingerie","thighs","booty","dance","blush","wink","seduce",
-    "fanservice","ecchi","cosplay","maid","school","idol","swimsuit","underboob",
-    "sideboob","cleavage","peach","thicc"
+    "husbando", "kitsune", "neko", "waifu",
+    "kiss", "hug", "cuddle", "pat", "wink", "smug", "dance"
 ]
 
+# nekos.life: keep common endpoints that exist (safe selection)
 NEKOS_LIFE_TERMS = [
-    "neko","waifu","bikini","swimsuit","lingerie","panties","thighs","stockings",
-    "oppai","big breasts","cute cosplay","maid","school uniform","cheerleader",
-    "blush","kiss","cuddle","hug","smug","pat","dance","wink","teasing","seductive"
+    "neko", "ngif", "lewd", "feet", "holo", "pat", "kiss", "hug"
 ]
 
+# nekos.moe: booru-like tag usage (examples: bikini, breasts, swimsuit)
 NEKOS_MOE_TERMS = [
-    "waifu","oppai","busty","bikini","lingerie","thighs","booty","cute cosplay",
-    "maid","schoolgirl","cheerleader","swimsuit","underwear","panties","stockings",
-    "underboob","sideboob","cleavage","thicc","jiggle","bounce","blush","wink","kiss"
+    "bikini", "swimsuit", "breasts", "panties", "blush", "waifu", "thighs", "stockings"
 ]
 
+# nekoapi (if used) - conservative set
 NEKOAPI_TERMS = [
-    "waifu","neko","oppai","busty","lingerie","panties","thighs","stockings",
-    "bikini","swimsuit","maid","cosplay","cleavage","underboob","sideboob","booty",
-    "big ass","thicc","curvy","seductive","teasing","flirty","blush","kiss","cuddle"
+    "waifu", "neko", "oppai", "bikini", "thighs", "panties", "stockings"
 ]
 
-OTAKUGIFS_TERMS = [
-    "kiss","hug","slap","dance","wink","cuddle","poke","blush","smug","pat",
-    "sexy","tease","fanservice","bikini","lingerie","oppai","thighs","booty",
-    "waifu","cosplay","maid","school uniform","cheerleader","thicc","jiggle"
-]
+# otakugifs: reaction-style tags (valid)
+OTAKUGIFS_TERMS = ["kiss", "hug", "slap", "punch", "wink", "dance", "cuddle", "poke"]
 
-ANIMEGIRLS_TERMS = [
-    "waifu","oppai","bikini","lingerie","thighs","stockings","panties","booty",
-    "swimsuit","cosplay","maid","school uniform","teasing","seductive","blush",
-    "wink","kiss","cuddle","dance","sideboob","underboob","cleavage","thicc","curvy"
-]
+# animegirls.online: mostly SFW/cute tags (still useful)
+ANIMEGIRLS_TERMS = ["waifu", "bikini", "cosplay", "maid", "school uniform", "swimsuit", "cute"]
 
+# Tenor / Giphy: search phrases tuned to "spicy" anime keywords
 TENOR_TERMS = [
-    "busty anime","big breasts anime","oppai anime","cleavage anime","lingerie anime",
-    "bikini anime","thighs anime","stockings anime","booty anime","big ass anime",
-    "ecchi anime","fanservice anime","sexy anime","flirty anime","cosplay anime",
-    "maid anime","school uniform anime","cheerleader anime","underboob anime","sideboob anime",
-    "thicc anime","jiggle anime","bounce anime","peekaboo anime","playful anime"
+    "busty anime", "big breasts anime", "oppai anime", "cleavage anime", "lingerie anime",
+    "bikini anime", "thighs anime", "stockings anime", "booty anime", "ecchi anime",
+    "fanservice anime", "sexy anime"
 ]
 
 GIPHY_TERMS = [
-    "busty anime","big boobs anime","oppai anime","bikini anime","lingerie anime",
-    "cleavage anime","thighs anime","stockings anime","booty shake anime","curvy anime",
-    "ecchi","fanservice","sexy anime","flirty","cosplay","maid outfit anime",
-    "school uniform anime","cheerleader anime","underboob","sideboob","thicc anime",
-    "jiggle","bounce","peekaboo","playful","seductive"
+    "busty anime", "big boobs anime", "oppai anime", "bikini anime", "lingerie anime",
+    "cleavage anime", "thighs anime", "booty shake anime", "ecchi", "fanservice"
 ]
 
 PROVIDER_TERMS = {
@@ -324,42 +314,40 @@ PROVIDER_TERMS = {
 
 # ---------------- Tag -> provider mapping ----------------
 def map_tag_for_provider(provider: str, tag: str) -> str:
-    """
-    Prefer provider-specific pool. If incoming tag already matches pool, return it.
-    Otherwise pick a pool term to maximize coverage.
-    """
     t = (tag or "").lower().strip()
     pool = PROVIDER_TERMS.get(provider, [])
+    # Prefer an exact match if the incoming tag contains a pool item
     if t:
         for p in pool:
             if p in t:
                 return p
-    # If pool available, pick randomly from pool (makes provider use its supported terms)
+    # Otherwise pick a pool term (so providers get queries they actually support)
     if pool:
         return random.choice(pool)
-    # fallback to passed tag or a neutral 'waifu'
+    # fallback
     return t or "waifu"
 
 # ------------------ FETCHERS (return gif_url, name_hint, meta) ------------------
-# (Use provider pools and mapping in fetch_gif call to prioritize provider categories)
-
 async def fetch_from_waifu_pics(session, positive):
     try:
         category = map_tag_for_provider("waifu_pics", positive)
         url = f"https://api.waifu.pics/nsfw/{quote_plus(category)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"waifu_pics nsfw {category} -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"waifu_pics nsfw {category} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
-            if not gif_url: return None, None, None
+            if not gif_url:
+                return None, None, None
             if filename_has_block_keyword(gif_url): return None, None, None
             if contains_illegal_indicators(json.dumps(payload) + " " + (category or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload))
             return gif_url, f"waifu_pics_{category}", payload
     except Exception as e:
-        logger.debug(f"fetch_from_waifu_pics error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_waifu_pics error: {e}")
         return None, None, None
 
 async def fetch_from_waifu_im(session, positive):
@@ -372,7 +360,8 @@ async def fetch_from_waifu_im(session, positive):
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
         async with session.get(base, params=params, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"waifu.im nsfw search -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"waifu.im nsfw search -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             images = payload.get("images") or payload.get("data") or []
@@ -385,13 +374,15 @@ async def fetch_from_waifu_im(session, positive):
             extract_and_add_tags_from_meta(str(img.get("tags", "")))
             return gif_url, f"waifu_im_{q}", img
     except Exception as e:
-        logger.debug(f"fetch_from_waifu_im error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_waifu_im error: {e}")
         return None, None, None
 
 async def fetch_from_waifu_it(session, positive):
     try:
         if not WAIFUIT_API_KEY:
-            logger.debug("waifu.it skipped: key missing")
+            if DEBUG_FETCH:
+                logger.debug("waifu.it skipped: key missing")
             return None, None, None
         q = map_tag_for_provider("waifu_it", positive)
         endpoint = f"https://waifu.it/api/v4/{quote_plus(q)}"
@@ -399,7 +390,8 @@ async def fetch_from_waifu_it(session, positive):
         headers["Authorization"] = WAIFUIT_API_KEY
         async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                logger.debug(f"waifu.it {endpoint} -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"waifu.it {endpoint} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image") or (payload.get("data") and payload["data"].get("url"))
@@ -409,7 +401,8 @@ async def fetch_from_waifu_it(session, positive):
             extract_and_add_tags_from_meta(json.dumps(payload))
             return gif_url, f"waifu_it_{q}", payload
     except Exception as e:
-        logger.debug(f"fetch_from_waifu_it error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_waifu_it error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_best(session, positive):
@@ -418,7 +411,8 @@ async def fetch_from_nekos_best(session, positive):
         url = f"https://nekos.best/api/v2/{quote_plus(q)}?amount=1"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"nekos.best {q} -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"nekos.best {q} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             results = payload.get("results") or []
@@ -431,7 +425,8 @@ async def fetch_from_nekos_best(session, positive):
             extract_and_add_tags_from_meta(json.dumps(r))
             return gif_url, f"nekos_best_{q}", r
     except Exception as e:
-        logger.debug(f"fetch_from_nekos_best error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_nekos_best error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_life(session, positive):
@@ -440,7 +435,8 @@ async def fetch_from_nekos_life(session, positive):
         url = f"https://nekos.life/api/v2/img/{quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"nekos.life {q} -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"nekos.life {q} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image") or payload.get("result")
@@ -450,7 +446,8 @@ async def fetch_from_nekos_life(session, positive):
             extract_and_add_tags_from_meta(json.dumps(payload))
             return gif_url, f"nekos_life_{q}", payload
     except Exception as e:
-        logger.debug(f"fetch_from_nekos_life error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_nekos_life error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_moe(session, positive):
@@ -459,7 +456,8 @@ async def fetch_from_nekos_moe(session, positive):
         url = f"https://nekos.moe/api/v3/gif/random?tag={quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"nekos.moe -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"nekos.moe -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             images = payload.get("images") or payload.get("data") or []
@@ -473,13 +471,14 @@ async def fetch_from_nekos_moe(session, positive):
             if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): return None, None, None
             return gif_url, f"nekos_moe_{q}", item
     except Exception as e:
-        logger.debug(f"fetch_from_nekos_moe error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_nekos_moe error: {e}")
         return None, None, None
 
 async def fetch_from_otakugifs(session, positive):
     try:
         q = map_tag_for_provider("otakugifs", positive)
-        valid_reactions = ["kiss","hug","slap","punch","wink","dance","cuddle"]
+        valid_reactions = ["kiss","hug","slap","punch","wink","dance","cuddle","poke"]
         reaction = "waifu"
         for v in valid_reactions:
             if v in q:
@@ -488,7 +487,8 @@ async def fetch_from_otakugifs(session, positive):
         url = f"https://otakugifs.xyz/api/gif?reaction={quote_plus(reaction)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"otakugifs -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"otakugifs -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("gif") or payload.get("file")
@@ -497,7 +497,8 @@ async def fetch_from_otakugifs(session, positive):
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             return gif_url, f"otakugifs_{reaction}", payload
     except Exception as e:
-        logger.debug(f"fetch_from_otakugifs error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_otakugifs error: {e}")
         return None, None, None
 
 async def fetch_from_animegirls_online(session, positive):
@@ -506,7 +507,8 @@ async def fetch_from_animegirls_online(session, positive):
         url = f"https://animegirls.online/api/random?tag={quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"animegirls_online -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"animegirls_online -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
@@ -515,7 +517,8 @@ async def fetch_from_animegirls_online(session, positive):
             if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             return gif_url, f"animegirls_online_{q}", payload
     except Exception as e:
-        logger.debug(f"fetch_from_animegirls_online error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_animegirls_online error: {e}")
         return None, None, None
 
 async def fetch_from_tenor(session, positive):
@@ -526,7 +529,8 @@ async def fetch_from_tenor(session, positive):
         tenor_url = f"https://g.tenor.com/v1/search?q={quote_plus(q)}&key={TENOR_API_KEY}&limit=30&contentfilter=off"
         async with session.get(tenor_url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"tenor -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"tenor -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             results = payload.get("results", []) or []
@@ -554,7 +558,8 @@ async def fetch_from_tenor(session, positive):
                 if contains_illegal_indicators(json.dumps(r) + " " + (q or "")): continue
                 return gif_url, f"tenor_{q}", r
     except Exception as e:
-        logger.debug(f"fetch_from_tenor error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_tenor error: {e}")
         return None, None, None
 
 async def fetch_from_giphy(session, positive):
@@ -565,7 +570,8 @@ async def fetch_from_giphy(session, positive):
         giphy_url = f"https://api.giphy.com/v1/gifs/search?api_key={GIPHY_API_KEY}&q={quote_plus(q)}&limit=30&rating=r"
         async with session.get(giphy_url, timeout=REQUEST_TIMEOUT, headers=DEFAULT_HEADERS) as resp:
             if resp.status != 200:
-                logger.debug(f"giphy -> {resp.status}")
+                if DEBUG_FETCH:
+                    logger.debug(f"giphy -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             arr = payload.get("data", []) or []
@@ -577,7 +583,8 @@ async def fetch_from_giphy(session, positive):
                 if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): continue
                 return gif_url, f"giphy_{q}", item
     except Exception as e:
-        logger.debug(f"fetch_from_giphy error: {e}")
+        if DEBUG_FETCH:
+            logger.debug(f"fetch_from_giphy error: {e}")
         return None, None, None
 
 # ---------------- Provider registry ----------------
@@ -588,6 +595,7 @@ PROVIDER_FETCHERS = {
     "nekos_best": fetch_from_nekos_best,
     "nekos_life": fetch_from_nekos_life,
     "nekos_moe": fetch_from_nekos_moe,
+    "nekoapi": fetch_from_nekos_moe,           # fallback to nekos.moe handler when nekoapi isn't available
     "otakugifs": fetch_from_otakugifs,
     "animegirls_online": fetch_from_animegirls_online,
     "tenor": fetch_from_tenor,
@@ -852,13 +860,168 @@ JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
     "✨ {display_name} arrived and the room got a whole lot warmer.",
     "🔥 {display_name} joined — clutch your hearts (and waifus).",
-    # ... (kept as in your lists)
+    "💫 {display_name} appears — the waifu meter spikes.",
+    "🍑 {display_name} walked in — cheeks feeling watched.",
+    "😏 {display_name} entered — someone brought snacks and thighs.",
+    "🎀 {display_name} steps in — cute, spicy, and a little extra.",
+    "🩷 {display_name} joined — cleavage alert in 3...2...1.",
+    "🌙 {display_name} arrives — moonlight + waifu vibes.",
+    "🦊 {display_name} has joined — foxiness overload.",
+    "💃 {display_name} joined — shake it, waifu style.",
+    "🎴 {display_name} appears — draw that lucky card, baby.",
+    "🍡 {display_name} came — sweet, tempting, and blushing.",
+    "🌶️ {display_name} arrived — a little spice never hurt.",
+    "🪩 {display_name} joined — ready to party and flirt.",
+    "👑 {display_name} enters — royalty of the flirty league.",
+    "🌺 {display_name} joined — flowers + flirts incoming.",
+    "🍑 Thicc vibes as {display_name} arrives.",
+    "✨ Stars twinkle — {display_name} is here to slay.",
+    "🥂 {display_name} has entered — cheers to the waifu life.",
+    "🫠 {display_name} joined — melting hearts left and right.",
+    "🎯 {display_name} arrived — hit the target of spiciness.",
+    "🧋 {display_name} stepped in — sweet bubble tea energy.",
+    "🏮 {display_name} joins — festival of flirty faces.",
+    "🫦 {display_name} entered — pouty lips and big eyes.",
+    "🎐 {display_name} arrives — wind chimes and winks.",
+    "🌟 {display_name} joined — glitter and glances.",
+    "🛸 {display_name} beamed down — alien waifu confirmed.",
+    "🌈 {display_name} arrives — color me smitten.",
+    "🍒 {display_name} showed up — cherry cheeks and smiles.",
+    "🪄 {display_name} joined — magic of a thousand blushes.",
+    "🧸 {display_name} enters — soft hugs and soft waifus.",
+    "💌 {display_name} arrived — a love letter in motion.",
+    "🔮 {display_name} joined — destiny's spicy twist.",
+    "🕊️ {display_name} appears — gentle flirts incoming.",
+    "📸 {display_name} walks in — strike a pose, darling.",
+    "🥳 {display_name} joined — confetti, smiles, and thigh-highs.",
+    "🧿 {display_name} arrived — protective charm, seductive grin.",
+    "🏖️ {display_name} joins — beach bikini and sun-kissed waifu.",
+    "🚀 {display_name} enters — lift off to flirt space.",
+    "🎶 {display_name} joined — soundtrack: heartbeat & blush.",
+    "🍯 {display_name} walks in — sticky-sweet charm detected.",
+    "🧁 {display_name} joined — sugar-coated shenanigans.",
+    "💎 {display_name} arrives — gem-bright and cheeky.",
+    "🩰 {display_name} joined — tutu twirls and coy winks.",
+    "🦄 {display_name} enters — magical waifu shimmer.",
+    "🌊 {display_name} arrives — waves of flirtation.",
+    "🍓 {display_name} joined — strawberry-sweet smiles.",
+    "🎈 {display_name} appears — balloon pop of attention.",
+    "🌿 {display_name} entered — herb-scented flirty breeze.",
+    "🧩 {display_name} joined — puzzlingly cute moves.",
+    "🧬 {display_name} arrived — genetically optimized charm.",
+    "🌓 {display_name} joins — half-moon, full tease.",
+    "📚 {display_name} enters — scholarly seduction.",
+    "🏵️ {display_name} arrived — floral blush and mischief.",
+    "🛁 {display_name} joined — steam, suds, and soft glances.",
+    "🧨 {display_name} appears — explosive cuteness.",
+    "🦋 {display_name} joined — fluttering lashes and coy smiles.",
+    "🥀 {display_name} enters — rosy petals and low-key spice.",
+    "🍫 {display_name} arrived — chocolatey charm unlocked.",
+    "🍷 {display_name} joined — sip, smile, sway.",
+    "🪙 {display_name} appears — a coin-flip of choices: flirt or tease?",
+    "🧭 {display_name} arrived — compass points to cute.",
+    "🪴 {display_name} joined — potted waifu energy.",
+    "🗝️ {display_name} enters — key to your heart (maybe!).",
+    "🛍️ {display_name} arrived — shopping bags full of sass.",
+    "🧶 {display_name} joins — knitted charm and warm hugs.",
+    "🧥 {display_name} entered — coat-swathe and smolder.",
+    "🩸 {display_name} joined — whisper of dramatic flair.",
+    "🪞 {display_name} appears — reflection looks better today.",
+    "🖤 {display_name} arrived — mysterious and alluring.",
+    "💐 {display_name} joined — a bouquet of winks.",
+    "🍀 {display_name} enters — lucky charm energy.",
+    "🛹 {display_name} arrived — skater flip and flirt.",
+    "🛼 {display_name} joins — roller-disco tease.",
+    "🕶️ {display_name} entered — sunglasses, smiles, sass.",
+    "📯 {display_name} arrived — the trumpets of attention!",
+    "🔔 {display_name} joined — ding-ding! look here!",
+    "🎤 {display_name} enters — sing, sway, seduce.",
+    "⛩️ {display_name} joined — torii gate to waifu heaven.",
+    "🏮 {display_name} appears — lantern-lit flirtation.",
+    "🧚 {display_name} joined — fairy winks and mischief.",
+    "🌸 {display_name} steps in — blossom & blush combo.",
+    "😽 {display_name} joined — cat-like charm engaged.",
+    "🥂 {display_name} arrived — cheers to cheeky times.",
+    "🩰 {display_name} steps in — ballet blush style.",
+    "🧋 {display_name} walked in — boba and flirty vibes.",
+    "🪄 {display_name} arrived — spellbound cuteness."
 ]
-# fill greetings to a decent size if needed
-while len(JOIN_GREETINGS) < 50:
+while len(JOIN_GREETINGS) < 100:
     JOIN_GREETINGS.append(random.choice(JOIN_GREETINGS))
+
+LEAVE_GREETINGS = [
+    "🌙 {display_name} drifts away — the moon hushes a little.",
+    "🍃 {display_name} fades out — petals fall where they once stood.",
+    "💫 {display_name} slips away — stardust in their wake.",
+    "🥀 {display_name} leaves — a blush left behind.",
+    "🫶 {display_name} departed — hands empty, hearts full.",
+    "🪄 {display_name} vanished — the magic took them home.",
+    "🍯 {display_name} left — sticky-sweet memories remain.",
+    "🧸 {display_name} walked off — soft hugs lost a bearer.",
+    "🫠 {display_name} logged off — meltdown of cuteness over.",
+    "🎴 {display_name} leaves — fortune says 'see you soon'.",
+    "🎈 {display_name} floated away — pop! gone.",
+    "🚀 {display_name} took off — orbiting elsewhere now.",
+    "🏖️ {display_name} left — headed to sunny shores.",
+    "🍓 {display_name} walked off — strawberry smiles left behind.",
+    "🎀 {display_name} departs — ribbon untied, wink kept.",
+    "🪩 {display_name} left — disco lights dim a bit.",
+    "🌺 {display_name} leaves — trail of petals.",
+    "🦊 {display_name} slinked away — fox-like mystery continues.",
+    "🕊️ {display_name} flew off — gentle and graceful.",
+    "📸 {display_name} left — last snapshot captured the grin.",
+    "🧁 {display_name} dipped out — frosting still warm.",
+    "🔮 {display_name} vanished — fate will meet again.",
+    "🪞 {display_name} walked away — mirror shows a smile.",
+    "🍷 {display_name} left — glass half-empty of flirtation.",
+    "🧭 {display_name} left — compass points elsewhere.",
+    "🧶 {display_name} departed — yarn untangles softly.",
+    "🩰 {display_name} leaves — tutus and goodbyes.",
+    "🛁 {display_name} left — steam cleared the room.",
+    "🦄 {display_name} galloped off — mythical and missed.",
+    "📚 {display_name} left — story paused mid-page.",
+    "🍫 {display_name} faded — cocoa-sweet exit.",
+    "🫦 {display_name} stepped away — pout still in the air.",
+    "🌊 {display_name} drifted off — tide took them.",
+    "🎶 {display_name} left — song fades but hum remains.",
+    "🧿 {display_name} departed — charm still glowing.",
+    "🏮 {display_name} left — lanterns dim.",
+    "🪴 {display_name} stepped away — potted bliss remains.",
+    "🗝️ {display_name} left — key placed down gently.",
+    "⛩️ {display_name} left the shrine — prayers kept.",
+    "🧚 {display_name} fluttered away — fairy dust lingers.",
+    "🖤 {display_name} left — mysterious silence follows.",
+    "🌿 {display_name} departed — green hush in the air.",
+    "🛍️ {display_name} left — bags full of mischief.",
+    "📯 {display_name} rode off — trumpet call dwindles.",
+    "🪙 {display_name} vanished — luck rolls onward.",
+    "🪄 {display_name} left — spell undone.",
+    "😽 {display_name} slipped away — catlike grace retained.",
+    "🎯 {display_name} left — target missed this time.",
+    "🥂 {display_name} left — toast to next time.",
+    "🧥 {display_name} left — coat taken, glances kept.",
+    "🛹 {display_name} skated off — kickflip and goodbye.",
+    "🛼 {display_name} rolled away — rollerbeats fade.",
+    "🕶️ {display_name} left — shades down and gone.",
+    "🔔 {display_name} departed — bell tolls faintly.",
+    "📸 {display_name} left — last frame a smirk.",
+    "🪙 {display_name} left — coin flicked into the void.",
+    "🧩 {display_name} walked off — puzzle missing a piece.",
+    "🪞 {display_name} left — reflection smiles alone.",
+    "🌸 {display_name} drifted away — petals to the wind.",
+    "💌 {display_name} left — letter sealed and mailed.",
+    "🏵️ {display_name} departed — floral farewell.",
+    "🧿 {display_name} left — charm still hums softly.",
+    "🧋 {display_name} left — last bubble popped.",
+    "🍒 {display_name} left — cherries still on the plate.",
+    "🍡 {display_name} walked away — dango leftover.",
+    "🧨 {display_name} vanished — sparkles died down.",
+    "🛏️ {display_name} left — nap time continues elsewhere.",
+    "🪶 {display_name} left — feather trails behind.",
+    "🛸 {display_name} left — alien waifu gone."
+]
 LEAVE_GREETINGS = ["🌙 {display_name} drifts away — the moon hushes a little."]
-while len(LEAVE_GREETINGS) < 50:
+while len(LEAVE_GREETINGS) < 100:
     LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
 
 intents = discord.Intents.default()
