@@ -1,4 +1,4 @@
-# bot_spiciest_final_full_nsfw_expanded_terms_random.py
+# bot_spiciest_final_full_nsfw_expanded_terms_random_roundrobin.py
 # NSFW bot with expanded provider-specific spicy tag pools (20-30 each).
 # STILL blocks illegal content (minors, bestiality, sexual violence, etc.).
 # Env vars: TOKEN, TENOR_API_KEY (opt), GIPHY_API_KEY (opt), WAIFUIM_API_KEY (opt), WAIFUIT_API_KEY (opt)
@@ -602,37 +602,62 @@ async def fetch_gif(user_id):
     user_key = str(user_id)
     sent = data["sent_history"].setdefault(user_key, [])
     providers = build_provider_pool()
+    if not providers:
+        return None, None, None
+
+    # Round-robin cycling: try each provider once per cycle in a shuffled order.
+    # This prevents one provider (e.g. giphy) from dominating results.
+    idx = 0
+    cycle_providers = providers[:]  # working list
+    random.shuffle(cycle_providers)
+
     async with aiohttp.ClientSession() as session:
         for attempt in range(FETCH_ATTEMPTS):
-            if not providers:
-                providers = build_provider_pool()
-            provider = random.choice(providers)
+            # If we've exhausted the cycle, reshuffle and start a new cycle
+            if idx >= len(cycle_providers):
+                cycle_providers = build_provider_pool()
+                if not cycle_providers:
+                    break
+                random.shuffle(cycle_providers)
+                idx = 0
+
+            provider = cycle_providers[idx]
+            idx += 1
+
             positive = random.choice(GIF_TAGS)
             if DEBUG_FETCH:
                 logger.debug(f"[fetch_gif] attempt {attempt+1}/{FETCH_ATTEMPTS} provider={provider} tag='{positive}'")
+
             fetcher = PROVIDER_FETCHERS.get(provider)
             if not fetcher:
                 continue
+
             try:
                 result = await fetcher(session, positive)
             except Exception as e:
                 logger.debug(f"fetcher {provider} error: {e}")
                 result = (None, None, None)
+
             if not result or not result[0]:
+                # provider failed — immediately continue to next provider in cycle
                 continue
+
             b, name, gif_url = result
             if not gif_url:
                 continue
             if filename_has_block_keyword(gif_url): continue
             if contains_illegal_indicators(gif_url + " " + (positive or "")): continue
+
             gif_hash = hashlib.sha1((gif_url or name or "").encode()).hexdigest()
             if gif_hash in sent:
                 continue
+
             sent.append(gif_hash)
             if len(sent) > MAX_USED_GIFS_PER_USER:
                 del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
             save_data()
             return b, name, gif_url
+
     return None, None, None
 
 # ---------------- Discord events/messages ----------------
