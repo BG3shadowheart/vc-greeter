@@ -6,7 +6,7 @@ import random
 import hashlib
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus, urlparse
 import aiohttp
 import discord
@@ -32,13 +32,15 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "14"))
 DISCORD_MAX_UPLOAD = int(os.getenv("DISCORD_MAX_UPLOAD", str(8 * 1024 * 1024)))
 HEAD_SIZE_LIMIT = DISCORD_MAX_UPLOAD
 DATA_FILE = os.getenv("DATA_FILE", "data_sfw.json")
-AUTOSAVE_INTERVAL = int(os.getenv("AUTOSAVE_INTERVAL", str(30)))
+AUTOSAVE_INTERVAL = int(os.getenv("AUTOSAVE_INTERVAL", "30"))
 FETCH_ATTEMPTS = int(os.getenv("FETCH_ATTEMPTS", "40"))
 MAX_USED_GIFS_PER_USER = int(os.getenv("MAX_USED_GIFS_PER_USER", "1000"))
 
-# Voice channel IDs (keep as in original or override via env)
 VC_IDS = [
-    int(os.getenv("VC_ID_1", "1353875050809524267")),
+    1353875050809524267,
+    21409170559337762980,
+    1353875404217253909,
+    1353882705246556220
 ]
 VC_CHANNEL_ID = int(os.getenv("VC_CHANNEL_ID", "1371916812903780573"))
 
@@ -55,7 +57,6 @@ ILLEGAL_TAGS = [
 ]
 FILENAME_BLOCK_KEYWORDS = ["orgy", "creampie", "facial", "scat", "fisting", "bestiality"]
 
-# For SFW bot we block explicit and underage/illegal content and some explicit categories
 EXCLUDE_TAGS = [
     "loli", "shota", "child", "minor", "underage", "young", "schoolgirl", "age_gap",
     "futa", "futanari", "shemale", "dickgirl", "femboy", "trap",
@@ -140,7 +141,7 @@ with open(DATA_FILE, "r") as f:
 
 data.setdefault("provider_weights", {})
 data.setdefault("sent_history", {})
-data.setdefault("gif_tags", [])
+data.setdefault("gif_tags", {})
 
 _seed_gif_tags = [
     "waifu", "neko", "kawaii", "cute", "smile", "blush", "hug", "kiss", "cuddle",
@@ -172,7 +173,7 @@ async def autosave_task():
 
 # ---------- Provider terms & mapping (SFW) ----------
 PROVIDER_TERMS = {
-    "waifu_pics": ["waifu", "neko", "cute", "smile", "bikini", "swimsuit", "maid", "cosplay", "blush", "pat", "smug", "wink", "wave"],
+    "waifu_pics": ["waifu", "neko", "hug", "kiss", "blush", "pat", "smug", "wink", "wave", "cute", "smile", "maid", "cosplay", "bikini", "swimsuit"],
     "waifu_im": ["waifu", "maid", "cute", "cosplay", "bikini", "thighs", "hug", "kiss"],
     "waifu_it": ["waifu", "cute", "cosplay", "smile"],
     "nekos_best": ["neko", "waifu", "kiss", "hug", "cuddle", "dance"],
@@ -237,20 +238,16 @@ async def fetch_from_waifu_pics(session, positive):
         url = f"https://api.waifu.pics/sfw/{quote_plus(category)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu_pics sfw {category} -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"waifu_pics sfw {category} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (category or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (category or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
             return gif_url, f"waifu_pics_{category}", payload
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_pics error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_waifu_pics error: {e}")
         return None, None, None
 
 async def fetch_from_waifu_im(session, positive):
@@ -263,51 +260,41 @@ async def fetch_from_waifu_im(session, positive):
             headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
         async with session.get(base, params=params, headers=headers or None, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu.im sfw search -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"waifu.im sfw search -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
+            if not images: return None, None, None
             img = random.choice(images)
             gif_url = img.get("url") or img.get("image") or img.get("src")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(img) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(img) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(str(img.get("tags", "")), GIF_TAGS, data)
             return gif_url, f"waifu_im_{q}", img
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_im error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_waifu_im error: {e}")
         return None, None, None
 
 async def fetch_from_waifu_it(session, positive):
     try:
         if not WAIFUIT_API_KEY:
-            if DEBUG_FETCH:
-                logger.debug("waifu.it skipped: key missing")
+            if DEBUG_FETCH: logger.debug("waifu.it skipped: key missing")
             return None, None, None
         q = map_tag_for_provider("waifu_it", positive)
         endpoint = f"https://waifu.it/api/v4/{quote_plus(q)}"
         headers = {"Authorization": WAIFUIT_API_KEY}
         async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu.it {endpoint} -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"waifu.it {endpoint} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image") or (payload.get("data") and payload["data"].get("url"))
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
             return gif_url, f"waifu_it_{q}", payload
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_it error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_waifu_it error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_best(session, positive):
@@ -316,24 +303,19 @@ async def fetch_from_nekos_best(session, positive):
         url = f"https://nekos.best/api/v2/{quote_plus(q)}?amount=1"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.best {q} -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"nekos.best {q} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             results = payload.get("results") or []
-            if not results:
-                return None, None, None
+            if not results: return None, None, None
             r = results[0]
             gif_url = r.get("url") or r.get("file") or r.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(r) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(r) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(r), GIF_TAGS, data)
             return gif_url, f"nekos_best_{q}", r
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_best error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_nekos_best error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_life(session, positive):
@@ -342,20 +324,16 @@ async def fetch_from_nekos_life(session, positive):
         url = f"https://nekos.life/api/v2/img/{quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.life {q} -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"nekos.life {q} -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image") or payload.get("result")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
             return gif_url, f"nekos_life_{q}", payload
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_life error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_nekos_life error: {e}")
         return None, None, None
 
 async def fetch_from_nekos_moe(session, positive):
@@ -364,26 +342,20 @@ async def fetch_from_nekos_moe(session, positive):
         url = f"https://nekos.moe/api/v3/gif/random?tag={quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.moe -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"nekos.moe -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
+            if not images: return None, None, None
             item = random.choice(images)
             gif_url = item.get("file") or item.get("url") or item.get("original") or item.get("image")
-            if not gif_url and item.get("id"):
-                gif_url = f"https://nekos.moe/image/{item['id']}.gif"
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(item) + " " + (q or "")):
-                return None, None, None
+            if not gif_url and item.get("id"): gif_url = f"https://nekos.moe/image/{item['id']}.gif"
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(item), GIF_TAGS, data)
             return gif_url, f"nekos_moe_{q}", item
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_moe error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_nekos_moe error: {e}")
         return None, None, None
 
 async def fetch_from_otakugifs(session, positive):
@@ -398,20 +370,16 @@ async def fetch_from_otakugifs(session, positive):
         url = f"https://otakugifs.xyz/api/gif?reaction={quote_plus(reaction)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"otakugifs -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"otakugifs -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("gif") or payload.get("file")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
             return gif_url, f"otakugifs_{reaction}", payload
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_otakugifs error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_otakugifs error: {e}")
         return None, None, None
 
 async def fetch_from_animegirls_online(session, positive):
@@ -420,20 +388,16 @@ async def fetch_from_animegirls_online(session, positive):
         url = f"https://animegirls.online/api/random?tag={quote_plus(q)}"
         async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"animegirls_online -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"animegirls_online -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
             gif_url = payload.get("url") or payload.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")): return None, None, None
             extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
             return gif_url, f"animegirls_online_{q}", payload
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_animegirls_online error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_animegirls_online error: {e}")
         return None, None, None
 
 async def fetch_from_danbooru(session, positive):
@@ -447,28 +411,22 @@ async def fetch_from_danbooru(session, positive):
             auth = aiohttp.BasicAuth(DANBOORU_USER, DANBOORU_API_KEY)
         async with session.get(url, params=params, timeout=REQUEST_TIMEOUT, auth=auth) as resp:
             if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"danbooru -> {resp.status}")
+                if DEBUG_FETCH: logger.debug(f"danbooru -> {resp.status}")
                 return None, None, None
             payload = await resp.json()
-            if not payload:
-                return None, None, None
+            if not payload: return None, None, None
             random.shuffle(payload)
             for item in payload:
                 tags_text = item.get("tag_string", "") or item.get("tag_string_general", "")
-                if _tag_is_disallowed(tags_text):
-                    continue
+                if _tag_is_disallowed(tags_text): continue
                 gif_url = item.get("file_url") or item.get("large_file_url") or item.get("source")
-                if not gif_url or filename_has_block_keyword(gif_url):
-                    continue
-                if contains_illegal_indicators(json.dumps(item) + " " + (q or "")):
-                    continue
+                if not gif_url or filename_has_block_keyword(gif_url): continue
+                if contains_illegal_indicators(json.dumps(item) + " " + (q or "")): continue
                 extract_and_add_tags_from_meta(tags_text, GIF_TAGS, data)
                 return gif_url, f"danbooru_{q}", item
             return None, None, None
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_danbooru error: {e}")
+        if DEBUG_FETCH: logger.debug(f"fetch_from_danbooru error: {e}")
         return None, None, None
 
 PROVIDER_FETCHERS = {
@@ -501,24 +459,23 @@ def build_provider_pool():
         random.shuffle(available)
         return available
     global _provider_cycle_deque, _last_cycle_refresh
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if not _provider_cycle_deque or (_last_cycle_refresh and (now - _last_cycle_refresh) > timedelta(minutes=15)):
         random.shuffle(available)
         _provider_cycle_deque = deque(available)
         _last_cycle_refresh = now
-        if DEBUG_FETCH:
-            logger.debug(f"Provider cycle (refreshed): {_provider_cycle_deque}")
+        if DEBUG_FETCH: logger.debug(f"Provider cycle (refreshed): {_provider_cycle_deque}")
     else:
         current = set(_provider_cycle_deque)
         if set(available) != current:
             random.shuffle(available)
             _provider_cycle_deque = deque(available)
             _last_cycle_refresh = now
-            if DEBUG_FETCH:
-                logger.debug(f"Provider cycle (rebuild): {_provider_cycle_deque}")
+            if DEBUG_FETCH: logger.debug(f"Provider cycle (rebuild): {_provider_cycle_deque}")
     return list(_provider_cycle_deque)
 
 # ---------- Fetching / sending ----------
+# NOTE: fetch_gif MUST NOT mark or persist 'sent' entries. Marking is done AFTER a successful send.
 async def attempt_get_media_bytes(session, gif_url):
     if not gif_url:
         return None, None, "no-url"
@@ -558,12 +515,9 @@ async def attempt_get_media_bytes(session, gif_url):
         return None, ctype2 or ctype, "unknown-size-get-failed-or-too-large"
 
 async def fetch_gif(user_id):
-    user_key = str(user_id)
-    sent_hashes = set(data.get("sent_history", {}).get(user_key, []))
     providers = build_provider_pool()
     if not providers:
-        if DEBUG_FETCH:
-            logger.debug("No providers available.")
+        if DEBUG_FETCH: logger.debug("No providers available.")
         return None, None, None, None
     async with aiohttp.ClientSession() as session:
         attempt = 0
@@ -589,43 +543,28 @@ async def fetch_gif(user_id):
             try:
                 gif_url, name_hint, meta = await fetcher(session, positive)
             except Exception as e:
-                if DEBUG_FETCH:
-                    logger.debug(f"Fetcher exception for {provider}: {e}")
+                if DEBUG_FETCH: logger.debug(f"Fetcher exception for {provider}: {e}")
                 continue
             if not gif_url:
-                if DEBUG_FETCH:
-                    logger.debug(f"{provider} returned no url.")
+                if DEBUG_FETCH: logger.debug(f"{provider} returned no url.")
                 continue
-            if filename_has_block_keyword(gif_url):
-                continue
-            if contains_illegal_indicators((gif_url or "") + " " + (str(meta) or "")):
-                continue
-            if _tag_is_disallowed(str(meta or "")):
-                continue
-            gif_hash = hashlib.sha1((gif_url or name_hint or "").encode()).hexdigest()
-            if gif_hash in sent_hashes:
-                if DEBUG_FETCH:
-                    logger.debug(f"Already sent gif hash for {gif_url}; skipping.")
-                continue
+            if filename_has_block_keyword(gif_url): continue
+            if contains_illegal_indicators((gif_url or "") + " " + (str(meta) or "")): continue
+            if _tag_is_disallowed(str(meta or "")): continue
+            # Do not mark as sent here. Return bytes if possible, or URL fallback.
             b, ctype, reason = await attempt_get_media_bytes(session, gif_url)
             if DEBUG_FETCH:
                 logger.debug(f"attempt_get_media_bytes -> provider={provider} url={gif_url} reason={reason} bytes_ok={bool(b)} ctype={ctype}")
-            if b:
-                ext = ""
-                try:
-                    parsed = urlparse(gif_url)
-                    ext = os.path.splitext(parsed.path)[1] or ".gif"
-                    if len(ext) > 6:
-                        ext = ".gif"
-                except Exception:
-                    ext = ".gif"
-                name = f"{provider}_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                return b, name, gif_url, ctype
-            else:
-                # return URL fallback and no bytes
-                return None, None, gif_url, ctype
-        if DEBUG_FETCH:
-            logger.debug("fetch_gif exhausted attempts.")
+            ext = ""
+            try:
+                parsed = urlparse(gif_url)
+                ext = os.path.splitext(parsed.path)[1] or ".gif"
+                if len(ext) > 6: ext = ".gif"
+            except Exception:
+                ext = ".gif"
+            name = f"{provider}_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
+            return b, name, gif_url, ctype
+        if DEBUG_FETCH: logger.debug("fetch_gif exhausted attempts.")
         return None, None, None, None
 
 def try_compress_bytes(b, ctype, max_size):
@@ -666,13 +605,12 @@ def try_compress_bytes(b, ctype, max_size):
                     return out.getvalue()
             return None
     except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"compression failed: {e}")
+        if DEBUG_FETCH: logger.debug(f"compression failed: {e}")
         return None
 
 def make_embed(title, desc, member, kind="join", count=None):
     color = discord.Color.blue() if kind == "join" else discord.Color.dark_gray()
-    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.utcnow())
+    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.now(timezone.utc))
     try:
         embed.set_thumbnail(url=member.display_avatar.url)
     except Exception:
@@ -762,6 +700,7 @@ async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name
                     if sent_success:
                         await record_sent_for_user(member.id, gif_url)
                     return
+            # fallback: try send link-only
             if gif_url:
                 if gif_url not in (embed.description or ""):
                     embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
@@ -984,7 +923,7 @@ LEAVE_GREETINGS = [
     "🎒 {display_name} left — backpack zipped, off they go.",
     "🧯 {display_name} left — small sparkles cooled."
 ]
-while len(LEAVE_GREETINGS) < 100:
+while len(LEAVE_GREETINGS) < 40:
     LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
 
 # ---------- Bot setup ----------
@@ -996,51 +935,14 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-@tasks.loop(seconds=60)
-async def ensure_connected_task():
-    try:
-        if not VC_IDS:
-            return
-        vc_id = VC_IDS[0]
-        channel = bot.get_channel(vc_id)
-        if not channel:
-            for g in bot.guilds:
-                ch = g.get_channel(vc_id)
-                if ch:
-                    channel = ch
-                    break
-        if not channel:
-            return
-        vc = discord.utils.get(bot.voice_clients, guild=channel.guild)
-        if not vc:
-            try:
-                await channel.connect(reconnect=True)
-                if DEBUG_FETCH:
-                    logger.debug(f"connected to VC {vc_id}")
-            except Exception as e:
-                if DEBUG_FETCH:
-                    logger.debug(f"failed connect: {e}")
-        else:
-            if vc.channel.id != channel.id:
-                try:
-                    await vc.move_to(channel)
-                except Exception as e:
-                    if DEBUG_FETCH:
-                        logger.debug(f"move failed: {e}")
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"ensure_connected unexpected: {e}")
-
 @bot.event
 async def on_ready():
     try:
         autosave_task.start()
     except RuntimeError:
         pass
-    try:
-        ensure_connected_task.start()
-    except RuntimeError:
-        pass
+    # Do NOT auto-connect to voice channels on startup.
+    # Bot will connect only when users join monitored VC(s).
     available = []
     for p in PROVIDER_FETCHERS.keys():
         key_ok = True
@@ -1066,9 +968,15 @@ async def on_voice_state_update(member, before, after):
             vc = discord.utils.get(bot.voice_clients, guild=member.guild)
             if vc:
                 if vc.channel.id != after.channel.id:
-                    await vc.move_to(after.channel)
+                    try:
+                        await vc.move_to(after.channel)
+                    except Exception:
+                        pass
             else:
-                await after.channel.connect()
+                try:
+                    await after.channel.connect()
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"VC join/connect error: {e}")
 
@@ -1093,7 +1001,10 @@ async def on_voice_state_update(member, before, after):
             if vc and vc.channel and vc.channel.id == before.channel.id:
                 non_bot_members = [m for m in vc.channel.members if not m.bot]
                 if len(non_bot_members) == 0:
-                    await vc.disconnect()
+                    try:
+                        await vc.disconnect()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.debug(f"Error checking/disconnecting VC: {e}")
 
