@@ -654,18 +654,100 @@ async def send_greeting_with_image_embed(channel, session, greeting_text, image_
         logger.error(f"Failed to send greeting embed: {e}")
         await channel.send(greeting_text)
 
+
+def get_vc_with_users(guild):
+    """Find the first monitored VC that has non-bot users. Returns (channel, user_count) or (None, 0)"""
+    for vc_id in VC_IDS:
+        vc = guild.get_channel(vc_id)
+        if vc and isinstance(vc, discord.VoiceChannel):
+            users = [m for m in vc.members if not m.bot]
+            if users:
+                return vc, len(users)
+    return None, 0
+
+
+def get_all_vcs_with_users(guild):
+    """Get all monitored VCs that have non-bot users. Returns list of (channel, user_count)"""
+    result = []
+    for vc_id in VC_IDS:
+        vc = guild.get_channel(vc_id)
+        if vc and isinstance(vc, discord.VoiceChannel):
+            users = [m for m in vc.members if not m.bot]
+            if users:
+                result.append((vc, len(users)))
+    return result
+
+
 def check_all_vcs_empty(guild):
     """Check if ALL monitored VCs are empty (no non-bot users)"""
     for vc_id in VC_IDS:
         vc = guild.get_channel(vc_id)
         if vc and isinstance(vc, discord.VoiceChannel):
-            # Count non-bot users in this VC
             users = [m for m in vc.members if not m.bot]
             if len(users) > 0:
-                # Found at least one user in a monitored VC
                 return False
-    # All monitored VCs are empty
     return True
+
+
+async def update_bot_vc_position(guild, target_channel=None):
+    """
+    Smart VC positioning logic:
+    - If all VCs empty -> disconnect
+    - If target_channel specified -> move/join to that channel
+    - Otherwise find a VC with users and go there
+    """
+    voice_client = guild.voice_client
+    
+    if target_channel and target_channel.id in VC_IDS:
+        users_in_target = [m for m in target_channel.members if not m.bot]
+        if users_in_target:
+            if voice_client and voice_client.is_connected():
+                if voice_client.channel.id != target_channel.id:
+                    try:
+                        await voice_client.move_to(target_channel)
+                        logger.info(f"Bot moved to VC: {target_channel.name}")
+                    except Exception as e:
+                        logger.error(f"Failed to move to VC: {e}")
+            else:
+                try:
+                    await target_channel.connect()
+                    logger.info(f"Bot joined VC: {target_channel.name}")
+                except Exception as e:
+                    logger.error(f"Failed to join VC: {e}")
+            return target_channel
+    
+    vcs_with_users = get_all_vcs_with_users(guild)
+    
+    if not vcs_with_users:
+        if voice_client and voice_client.is_connected():
+            try:
+                await voice_client.disconnect()
+                logger.info("Bot disconnected - all monitored VCs are empty")
+            except Exception as e:
+                logger.error(f"Failed to disconnect: {e}")
+        return None
+    
+    target_vc = vcs_with_users[0][0]
+    
+    if voice_client and voice_client.is_connected():
+        if voice_client.channel.id == target_vc.id:
+            return target_vc
+        try:
+            await voice_client.move_to(target_vc)
+            logger.info(f"Bot moved to VC: {target_vc.name}")
+            return target_vc
+        except Exception as e:
+            logger.error(f"Failed to move to VC: {e}")
+            return None
+    else:
+        try:
+            await target_vc.connect()
+            logger.info(f"Bot joined VC: {target_vc.name}")
+            return target_vc
+        except Exception as e:
+            logger.error(f"Failed to join VC: {e}")
+            return None
+
 
 intents = discord.Intents.default()
 intents.voice_states = True
@@ -673,88 +755,73 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user}")
     autosave_task.start()
     check_vc.start()
+    
+    for guild in bot.guilds:
+        await update_bot_vc_position(guild)
+
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.id == bot.user.id:
+    if member.bot:
         return
     
-    # User JOINED a monitored VC
-    if before.channel is None and after.channel is not None:
-        if after.channel.id in VC_IDS:
-            guild = after.channel.guild
-            
-            # Bot joins VC if not already connected
-            if guild.voice_client is None:
-                try:
-                    await after.channel.connect()
-                    logger.info(f"Bot joined VC: {after.channel.name}")
-                except Exception as e:
-                    logger.error(f"Failed to join VC: {e}")
-            
-            # Send greeting with image embed
-            channel = bot.get_channel(VC_CHANNEL_ID)
-            if channel:
-                try:
-                    greeting = random.choice(JOIN_GREETINGS).format(display_name=member.display_name)
-                    
-                    async with aiohttp.ClientSession() as session:
-                        gif_url, source, meta = await fetch_random_gif(session, member.id)
-                        if gif_url:
-                            await send_greeting_with_image_embed(channel, session, greeting, gif_url, member)
-                            logger.info(f"Sent join greeting embed from {source}")
-                        else:
-                            await channel.send(greeting)
-                except Exception as e:
-                    logger.error(f"Failed to send join greeting: {e}")
+    guild = member.guild
+    before_vc = before.channel
+    after_vc = after.channel
     
-    # User LEFT a monitored VC
-    elif before.channel is not None and after.channel is None:
-        if before.channel.id in VC_IDS:
-            # Send leave greeting with image embed
-            channel = bot.get_channel(VC_CHANNEL_ID)
-            if channel:
-                try:
-                    leave_msg = random.choice(LEAVE_GREETINGS).format(display_name=member.display_name)
-                    
-                    async with aiohttp.ClientSession() as session:
-                        gif_url, source, meta = await fetch_random_gif(session, member.id)
-                        if gif_url:
-                            await send_greeting_with_image_embed(channel, session, leave_msg, gif_url, member)
-                            logger.info(f"Sent leave greeting embed from {source}")
-                        else:
-                            await channel.send(leave_msg)
-                except Exception as e:
-                    logger.error(f"Failed to send leave greeting: {e}")
-            
-            # Check if ALL monitored VCs are now empty
-            guild = before.channel.guild
-            if check_all_vcs_empty(guild):
-                # All VCs are empty, disconnect bot
-                if guild.voice_client:
-                    try:
-                        await guild.voice_client.disconnect()
-                        logger.info(f"Bot left VC (ALL monitored VCs are now empty)")
-                    except Exception as e:
-                        logger.error(f"Failed to leave VC: {e}")
+    before_in_monitored = before_vc and before_vc.id in VC_IDS
+    after_in_monitored = after_vc and after_vc.id in VC_IDS
+    
+    if after_in_monitored and (not before_in_monitored or before_vc != after_vc):
+        channel = bot.get_channel(VC_CHANNEL_ID)
+        if channel:
+            try:
+                greeting = random.choice(JOIN_GREETINGS).format(display_name=member.display_name)
+                async with aiohttp.ClientSession() as session:
+                    gif_url, source, meta = await fetch_random_gif(session, member.id)
+                    if gif_url:
+                        await send_greeting_with_image_embed(channel, session, greeting, gif_url, member)
+                        logger.info(f"Sent join greeting embed from {source}")
+                    else:
+                        await channel.send(greeting)
+            except Exception as e:
+                logger.error(f"Failed to send join greeting: {e}")
+        
+        await asyncio.sleep(0.3)
+        await update_bot_vc_position(guild, target_channel=after_vc)
+        return
+    
+    if before_in_monitored and (not after_in_monitored or before_vc != after_vc):
+        channel = bot.get_channel(VC_CHANNEL_ID)
+        if channel:
+            try:
+                leave_msg = random.choice(LEAVE_GREETINGS).format(display_name=member.display_name)
+                async with aiohttp.ClientSession() as session:
+                    gif_url, source, meta = await fetch_random_gif(session, member.id)
+                    if gif_url:
+                        await send_greeting_with_image_embed(channel, session, leave_msg, gif_url, member)
+                        logger.info(f"Sent leave greeting embed from {source}")
+                    else:
+                        await channel.send(leave_msg)
+            except Exception as e:
+                logger.error(f"Failed to send leave greeting: {e}")
+        
+        await asyncio.sleep(0.3)
+        await update_bot_vc_position(guild)
 
-@tasks.loop(seconds=120)
+
+@tasks.loop(seconds=30)
 async def check_vc():
-    """Periodic check to disconnect bot if all monitored VCs are empty"""
+    """Periodic check to ensure bot is in the right VC or disconnected if all empty"""
     for guild in bot.guilds:
-        if guild.voice_client:
-            # Check if all monitored VCs in this guild are empty
-            if check_all_vcs_empty(guild):
-                try:
-                    await guild.voice_client.disconnect()
-                    logger.info(f"Bot left VC in {guild.name} (all monitored VCs empty - periodic check)")
-                except Exception as e:
-                    logger.error(f"Failed to disconnect from VC: {e}")
+        await update_bot_vc_position(guild)
+
 
 @bot.command()
 async def sfw(ctx):
@@ -779,5 +846,6 @@ async def sfw(ctx):
                 await ctx.send("Failed to fetch SFW content. Try again.")
         else:
             await ctx.send("Failed to fetch SFW content. Try again.")
+
 
 bot.run(TOKEN)
