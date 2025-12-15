@@ -160,76 +160,95 @@ JOIN_GREETINGS = [
     "🪄 {display_name} arrived — spellbound cuteness."
 ]
 
-LEAVE_GREETINGS = [
-    "🌙 {display_name} drifts away — the moon hushes a little.",
-    "🍃 {display_name} fades out — petals fall where they once stood.",
-    "💫 {display_name} slips away — stardust in their wake.",
-    "🥀 {display_name} leaves — a blush left behind.",
-    "🫶 {display_name} departed — hands empty, hearts full.",
-    "🪄 {display_name} vanished — the magic took them home.",
-    "🍯 {display_name} left — sticky-sweet memories remain.",
-    "🧸 {display_name} walked off — soft hugs lost a bearer.",
-    "🫠 {display_name} logged off — meltdown of cuteness over.",
-    "🎴 {display_name} leaves — fortune says 'see you soon'.",
-    "🎈 {display_name} floated away — pop! gone.",
-    "🚀 {display_name} took off — orbiting elsewhere now.",
-    "🏖️ {display_name} left — headed to sunny shores.",
-    "🍓 {display_name} walked off — strawberry smiles left behind.",
-    "🎀 {display_name} departs — ribbon untied, wink kept.",
-    "🪩 {display_name} left — disco lights dim a bit.",
-    "🌺 {display_name} leaves — trail of petals.",
-    "🦊 {display_name} slinked away — fox-like mystery continues.",
-    "🕊️ {display_name} flew off — gentle and graceful.",
-    "📸 {display_name} left — last snapshot captured the grin.",
-    "🧁 {display_name} dipped out — frosting still warm.",
-    "🔮 {display_name} vanished — fate will meet again.",
-    "🪞 {display_name} walked away — mirror shows a smile.",
-    "🍷 {display_name} left — glass half-empty of flirtation.",
-    "🧭 {display_name} left — compass points elsewhere.",
-    "🧶 {display_name} departed — yarn untangles softly.",
-    "🩰 {display_name} leaves — tutus and goodbyes.",
-    "🛁 {display_name} left — steam cleared the room.",
-    "🦄 {display_name} galloped off — mythical and missed.",
-    "📚 {display_name} left — story paused mid-page.",
-    "🍫 {display_name} faded — cocoa-sweet exit.",
-    "🫦 {display_name} stepped away — pout still in the air.",
-    "🌊 {display_name} drifted off — tide took them.",
-    "🎶 {display_name} left — song fades but hum remains.",
-    "🧿 {display_name} departed — charm still glowing.",
-    "🏮 {display_name} left — lanterns dim.",
-    "🪴 {display_name} stepped away — potted bliss remains.",
-    "🗝️ {display_name} left — key placed down gently.",
-    "⛩️ {display_name} left the shrine — prayers kept.",
-    "🧚 {display_name} fluttered away — fairy dust lingers.",
-    "🖤 {display_name} left — mysterious silence follows.",
-    "🌿 {display_name} departed — green hush in the air.",
-    "🛍️ {display_name} left — bags full of mischief.",
-    "📯 {display_name} rode off — trumpet call dwindles.",
-    "🪙 {display_name} vanished — luck rolls onward.",
-    "🪄 {display_name} left — spell undone.",
-    "😽 {display_name} slipped away — catlike grace retained.",
-    "🎯 {display_name} left — target missed this time.",
-    "🥂 {display_name} left — toast to next time.",
-    "🧥 {display_name} left — coat taken, glances kept.",
-    "🛹 {display_name} skated off — kickflip and goodbye.",
-    "🛼 {display_name} rolled away — rollerbeats fade.",
-    "🕶️ {display_name} left — shades down and gone.",
-    "🔔 {display_name} departed — bell tolls faintly.",
-    "📸 {display_name} left — last frame a smirk.",
-    "🪙 {display_name} left — coin flicked into the void.",
-    "🧩 {display_name} walked off — puzzle missing a piece.",
-    "🪞 {display_name} left — reflection smiles alone.",
-    "🌸 {display_name} drifted away — petals to the wind.",
-    "💌 {display_name} left — letter sealed and mailed.",
-    "🏵️ {display_name} departed — floral farewell.",
-    "🧿 {display_name} left — charm still hums softly.",
-    "🧋 {display_name} left — last bubble popped.",
-    "🍒 {display_name} left — cherries still on the plate.",
-    "🍡 {display_name} walked away — dango leftover.",
-    "🧨 {display_name} vanished — sparkles died down.",
-    "🛏️ {display_name} left — nap time continues elsewhere.",
-    "🪶 {display_name} left — feather trails behind.",
-    "🛸 {display_name} left — alien waifu gone."
+JOIN_GREETINGS = [
+    "🌸 {display_name} sashays into the scene — waifu energy rising!",
+    "✨ {display_name} arrived and the room got a whole lot warmer.",
+    "🔥 {display_name} joined — clutch your hearts (and waifus).",
+    "💫 {display_name} appears — the waifu meter spikes.",
+    "🍑 {display_name} walked in — cheeks feeling watched.",
+    "😏 {display_name} entered — someone brought snacks and thighs.",
+    "🎀 {display_name} steps in — cute, spicy, and a little extra.",
+    "🩷 {display_name} joined — cleavage alert in 3...2...1.",
+    "🌙 {display_name} arrives — moonlight + waifu vibes.",
+    "🦊 {display_name} has joined — foxiness overload.",
+    "💃 {display_name} joined — shake it, waifu style.",
+    "🎴 {display_name} appears — draw that lucky card, baby.",
+    "🍡 {display_name} came — sweet, tempting, and blushing.",
+    "🌶️ {display_name} arrived — a little spice never hurt.",
+    "🪩 {display_name} joined — ready to party and flirt.",
+    "👑 {display_name} enters — royalty of the flirty league.",
+    "🌺 {display_name} joined — flowers + flirts incoming.",
+    "🍑 Thicc vibes as {display_name} arrives.",
+    "✨ Stars twinkle — {display_name} is here to slay.",
+    "🥂 {display_name} has entered — cheers to the waifu life.",
+    "🫠 {display_name} joined — melting hearts left and right.",
+    "🎯 {display_name} arrived — hit the target of spiciness.",
+    "🧋 {display_name} stepped in — sweet bubble tea energy.",
+    "🏮 {display_name} joins — festival of flirty faces.",
+    "🫦 {display_name} entered — pouty lips and big eyes.",
+    "🎐 {display_name} arrives — wind chimes and winks.",
+    "🌟 {display_name} joined — glitter and glances.",
+    "🛸 {display_name} beamed down — alien waifu confirmed.",
+    "🌈 {display_name} arrives — color me smitten.",
+    "🍒 {display_name} showed up — cherry cheeks and smiles.",
+    "🪄 {display_name} joined — magic of a thousand blushes.",
+    "🧸 {display_name} enters — soft hugs and soft waifus.",
+    "💌 {display_name} arrived — a love letter in motion.",
+    "🔮 {display_name} joined — destiny's spicy twist.",
+    "🕊️ {display_name} appears — gentle flirts incoming.",
+    "📸 {display_name} walks in — strike a pose, darling.",
+    "🥳 {display_name} joined — confetti, smiles, and thigh-highs.",
+    "🧿 {display_name} arrived — protective charm, seductive grin.",
+    "🏖️ {display_name} joins — beach bikini and sun-kissed waifu.",
+    "🚀 {display_name} enters — lift off to flirt space.",
+    "🎶 {display_name} joined — soundtrack: heartbeat & blush.",
+    "🍯 {display_name} walks in — sticky-sweet charm detected.",
+    "🧁 {display_name} joined — sugar-coated shenanigans.",
+    "💎 {display_name} arrives — gem-bright and cheeky.",
+    "🩰 {display_name} joined — tutu twirls and coy winks.",
+    "🦄 {display_name} enters — magical waifu shimmer.",
+    "🌊 {display_name} arrives — waves of flirtation.",
+    "🍓 {display_name} joined — strawberry-sweet smiles.",
+    "🎈 {display_name} appears — balloon pop of attention.",
+    "🌿 {display_name} entered — herb-scented flirty breeze.",
+    "🧩 {display_name} joined — puzzlingly cute moves.",
+    "🧬 {display_name} arrived — genetically optimized charm.",
+    "🌓 {display_name} joins — half-moon, full tease.",
+    "📚 {display_name} enters — scholarly seduction.",
+    "🏵️ {display_name} arrived — floral blush and mischief.",
+    "🛁 {display_name} joined — steam, suds, and soft glances.",
+    "🧨 {display_name} appears — explosive cuteness.",
+    "🦋 {display_name} joined — fluttering lashes and coy smiles.",
+    "🥀 {display_name} enters — rosy petals and low-key spice.",
+    "🍫 {display_name} arrived — chocolatey charm unlocked.",
+    "🍷 {display_name} joined — sip, smile, sway.",
+    "🪙 {display_name} appears — a coin-flip of choices: flirt or tease?",
+    "🧭 {display_name} arrived — compass points to cute.",
+    "🪴 {display_name} joined — potted waifu energy.",
+    "🗝️ {display_name} enters — key to your heart (maybe!).",
+    "🛍️ {display_name} arrived — shopping bags full of sass.",
+    "🧶 {display_name} joins — knitted charm and warm hugs.",
+    "🧥 {display_name} entered — coat-swathe and smolder.",
+    "🩸 {display_name} joined — whisper of dramatic flair.",
+    "🪞 {display_name} appears — reflection looks better today.",
+    "🖤 {display_name} arrived — mysterious and alluring.",
+    "💐 {display_name} joined — a bouquet of winks.",
+    "🍀 {display_name} enters — lucky charm energy.",
+    "🛹 {display_name} arrived — skater flip and flirt.",
+    "🛼 {display_name} joins — roller-disco tease.",
+    "🕶️ {display_name} entered — sunglasses, smiles, sass.",
+    "📯 {display_name} arrived — the trumpets of attention!",
+    "🔔 {display_name} joined — ding-ding! look here!",
+    "🎤 {display_name} enters — sing, sway, seduce.",
+    "⛩️ {display_name} joined — torii gate to waifu heaven.",
+    "🏮 {display_name} appears — lantern-lit flirtation.",
+    "🧚 {display_name} joined — fairy winks and mischief.",
+    "🌸 {display_name} steps in — blossom & blush combo.",
+    "😽 {display_name} joined — cat-like charm engaged.",
+    "🥂 {display_name} arrived — cheers to cheeky times.",
+    "🩰 {display_name} steps in — ballet blush style.",
+    "🧋 {display_name} walked in — boba and flirty vibes.",
+    "🪄 {display_name} arrived — spellbound cuteness."
 ]
 
 def _normalize_text(s: str) -> str:
@@ -672,9 +691,12 @@ async def on_voice_state_update(member, before, after):
     if member.id == bot.user.id:
         return
     
+    # User JOINED a monitored VC
     if before.channel is None and after.channel is not None:
         if after.channel.id in VC_IDS:
             guild = after.channel.guild
+            
+            # Bot joins VC if not already connected
             if guild.voice_client is None:
                 try:
                     await after.channel.connect()
@@ -682,6 +704,7 @@ async def on_voice_state_update(member, before, after):
                 except Exception as e:
                     logger.error(f"Failed to join VC: {e}")
             
+            # Send greeting with image embed
             channel = bot.get_channel(VC_CHANNEL_ID)
             if channel:
                 try:
@@ -697,8 +720,10 @@ async def on_voice_state_update(member, before, after):
                 except Exception as e:
                     logger.error(f"Failed to send join greeting: {e}")
     
+    # User LEFT a monitored VC
     elif before.channel is not None and after.channel is None:
         if before.channel.id in VC_IDS:
+            # Send leave greeting with image embed
             channel = bot.get_channel(VC_CHANNEL_ID)
             if channel:
                 try:
@@ -714,31 +739,35 @@ async def on_voice_state_update(member, before, after):
                 except Exception as e:
                     logger.error(f"Failed to send leave greeting: {e}")
             
-            remaining = [m for m in before.channel.members if not m.bot]
-            if len(remaining) == 0:
+            # Check if VC is NOW EMPTY (no non-bot users)
+            remaining_users = [m for m in before.channel.members if not m.bot]
+            if len(remaining_users) == 0:
                 guild = before.channel.guild
                 if guild.voice_client:
                     try:
                         await guild.voice_client.disconnect()
-                        logger.info(f"Bot left VC: {before.channel.name} (no users)")
+                        logger.info(f"Bot left VC: {before.channel.name} (VC is now empty)")
                     except Exception as e:
                         logger.error(f"Failed to leave VC: {e}")
 
 @tasks.loop(seconds=120)
 async def check_vc():
+    """Periodic check to disconnect bot from empty VCs"""
     for vc_id in VC_IDS:
         vc = bot.get_channel(vc_id)
         if not vc or not isinstance(vc, discord.VoiceChannel):
             continue
         
-        remaining = [m for m in vc.members if not m.bot]
-        if len(remaining) == 0:
-            if vc.guild.voice_client:
-                try:
-                    await vc.guild.voice_client.disconnect()
-                    logger.info(f"Bot left empty VC: {vc.name}")
-                except Exception:
-                    pass
+        # Check if there are any non-bot users in VC
+        remaining_users = [m for m in vc.members if not m.bot]
+        
+        # If VC is empty and bot is connected, disconnect
+        if len(remaining_users) == 0 and vc.guild.voice_client:
+            try:
+                await vc.guild.voice_client.disconnect()
+                logger.info(f"Bot left empty VC: {vc.name} (periodic check)")
+            except Exception as e:
+                logger.error(f"Failed to disconnect from VC: {e}")
 
 @bot.command()
 async def sfw(ctx):
