@@ -5,6 +5,7 @@ import random
 import hashlib
 import logging
 import re
+import asyncio
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus, urlparse
 import aiohttp
@@ -19,7 +20,6 @@ except Exception:
 
 TOKEN = os.getenv("TOKEN", "")
 WAIFUIM_API_KEY = os.getenv("WAIFUIM_API_KEY", "")
-WAIFUIT_API_KEY = os.getenv("WAIFUIT_API_KEY", "")
 DANBOORU_USER = os.getenv("DANBOORU_USER", "")
 DANBOORU_API_KEY = os.getenv("DANBOORU_API_KEY", "")
 
@@ -35,10 +35,7 @@ FETCH_ATTEMPTS = int(os.getenv("FETCH_ATTEMPTS", "40"))
 MAX_USED_GIFS_PER_USER = int(os.getenv("MAX_USED_GIFS_PER_USER", "1000"))
 
 VC_IDS = [
-    1353875050809524267,
-    21409170559337762980,
-    1353875404217253909,
-    1353882705246556220
+    int(os.getenv("VC_ID_1", "1409170559337762980")),
 ]
 VC_CHANNEL_ID = int(os.getenv("VC_CHANNEL_ID", "1371916812903780573"))
 
@@ -49,735 +46,25 @@ _token_split_re = re.compile(r"[^a-z0-9]+")
 
 ILLEGAL_TAGS = [
     "underage", "minor", "child", "loli", "shota", "young", "agegap",
-    "rape", "sexual violence", "bestiality", "zoophilia", "bestial",
-    "scat", "fisting", "incest", "pedo", "pedophile", "creampie"
+    "bestiality", "zoophilia", "bestial",
+    "scat", "fisting", "incest", "pedo", "pedophile"
 ]
-FILENAME_BLOCK_KEYWORDS = ["orgy", "creampie", "facial", "scat", "fisting", "bestiality"]
+
+BLOCKED_TAGS = [
+    "futanari", "futa", "dickgirl", "shemale", "transgender", "newhalf",
+    "yaoi", "gay", "male", "femboy", "trap", "otoko_no_ko", "crossdressing",
+    "penis", "bara", "3d", "real", "photo", "cosplay", "irl",
+    "nude", "naked", "nipples", "pussy", "vagina", "sex", "cum", "anal", "oral",
+    "hentai", "xxx", "explicit", "masturbation", "penetration"
+]
+
+FILENAME_BLOCK_KEYWORDS = ["nude", "naked", "hentai", "sex", "cum", "pussy"]
 
 EXCLUDE_TAGS = [
     "loli", "shota", "child", "minor", "underage", "young", "schoolgirl", "age_gap",
     "futa", "futanari", "shemale", "dickgirl", "femboy", "trap",
-    "gay", "yaoi", "male", "man", "boy"
+    "gay", "yaoi", "male", "man", "boy", "penis"
 ]
-
-def _normalize_text(s: str) -> str:
-    return "" if not s else re.sub(r'[\s\-_]+', ' ', s.lower())
-
-def _tag_is_disallowed(t: str) -> bool:
-    if not t:
-        return True
-    t = t.lower()
-    if any(ex in t for ex in EXCLUDE_TAGS):
-        return True
-    if any(b in t for b in ILLEGAL_TAGS):
-        return True
-    return False
-
-def contains_illegal_indicators(text: str) -> bool:
-    if not text or not isinstance(text, str):
-        return False
-    normalized = _normalize_text(text)
-    for bad in ILLEGAL_TAGS:
-        if bad in normalized:
-            return True
-    return False
-
-def filename_has_block_keyword(url: str) -> bool:
-    if not url:
-        return False
-    low = url.lower()
-    return any(kw in low for kw in FILENAME_BLOCK_KEYWORDS)
-
-def _dedupe_preserve_order(lst):
-    seen = set()
-    out = []
-    for x in lst:
-        if not isinstance(x, str):
-            continue
-        nx = x.strip().lower()
-        if not nx or nx in seen:
-            continue
-        seen.add(nx)
-        out.append(nx)
-    return out
-
-def add_tag_to_gif_tags(tag: str, GIF_TAGS, data_save):
-    if not tag or not isinstance(tag, str):
-        return False
-    t = tag.strip().lower()
-    if len(t) < 3 or t in GIF_TAGS or _tag_is_disallowed(t):
-        return False
-    GIF_TAGS.append(t)
-    data_save["gif_tags"] = _dedupe_preserve_order(data_save.get("gif_tags", []) + [t])
-    try:
-        with open(DATA_FILE, "w") as f:
-            json.dump(data_save, f, indent=2)
-    except Exception:
-        pass
-    logger.debug(f"learned tag: {t}")
-    return True
-
-def extract_and_add_tags_from_meta(meta_text: str, GIF_TAGS, data_save):
-    if not meta_text:
-        return
-    text = _normalize_text(meta_text)
-    tokens = _token_split_re.split(text)
-    for tok in tokens:
-        tok = tok.strip()
-        if not tok or tok.isdigit() or len(tok) < 3:
-            continue
-        add_tag_to_gif_tags(tok, GIF_TAGS, data_save)
-
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump({"provider_weights": {}, "sent_history": {}, "gif_tags": []}, f, indent=2)
-
-with open(DATA_FILE, "r") as f:
-    data = json.load(f)
-
-data.setdefault("provider_weights", {})
-data.setdefault("sent_history", {})
-data.setdefault("gif_tags", {})
-
-_seed_gif_tags = [
-    "waifu", "neko", "kawaii", "cute", "smile", "blush", "hug", "kiss", "cuddle",
-    "cosplay", "maid", "bikini", "swimsuit", "idol", "thighs", "stockings",
-    "fanservice", "flirty", "teasing", "dance", "pat", "smug", "wink", "wave", "happy", "romantic", "beach"
-]
-
-persisted = _dedupe_preserve_order(data.get("gif_tags", []))
-seed = _dedupe_preserve_order(_seed_gif_tags)
-combined = seed + [t for t in persisted if t not in seed]
-GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowed(t)]
-if not GIF_TAGS:
-    GIF_TAGS = ["waifu"]
-
-def save_data():
-    try:
-        data["gif_tags"] = GIF_TAGS
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logger.warning(f"save failed: {e}")
-
-@tasks.loop(seconds=AUTOSAVE_INTERVAL)
-async def autosave_task():
-    try:
-        save_data()
-    except Exception as e:
-        logger.warning(f"Autosave failed: {e}")
-
-PROVIDER_TERMS = {
-    "waifu_pics": ["waifu", "neko", "hug", "kiss", "blush", "pat", "smug", "wink", "wave", "cute", "smile", "maid", "cosplay", "bikini", "swimsuit"],
-    "waifu_im": ["waifu", "maid", "cute", "cosplay", "bikini", "thighs", "hug", "kiss"],
-    "waifu_it": ["waifu", "cute", "cosplay", "smile"],
-    "nekos_best": ["neko", "waifu", "kiss", "hug", "cuddle", "dance"],
-    "nekos_life": ["neko", "ngif", "lewd_hint", "hug", "kiss", "pat"],
-    "nekos_moe": ["bikini", "swimsuit", "blush", "waifu", "thighs", "stockings"],
-    "nekoapi": ["waifu", "neko", "bikini", "panties", "thighs"],
-    "otakugifs": ["kiss", "hug", "cuddle", "dance", "wink", "poke"],
-    "animegirls_online": ["waifu", "bikini", "maid", "cosplay"],
-    "danbooru_safe": ["smile", "blush", "cute", "cosplay", "bikini", "swimsuit", "maid", "kiss", "hug"]
-}
-
-def map_tag_for_provider(provider: str, tag: str) -> str:
-    t = (tag or "").lower().strip()
-    pool = PROVIDER_TERMS.get(provider, [])
-    if t:
-        for p in pool:
-            if p in t:
-                return p
-    if pool:
-        return random.choice(pool)
-    return t or "waifu"
-
-async def _head_url(session, url, timeout=REQUEST_TIMEOUT):
-    try:
-        async with session.head(url, timeout=timeout, allow_redirects=True) as resp:
-            return resp.status, dict(resp.headers)
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"HEAD failed for {url}: {e}")
-        return None, {}
-
-async def _download_bytes_with_limit(session, url, size_limit=HEAD_SIZE_LIMIT, timeout=REQUEST_TIMEOUT):
-    try:
-        async with session.get(url, timeout=timeout, allow_redirects=True) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"GET {url} returned {resp.status}")
-                return None, None
-            ctype = resp.content_type or ""
-            total = 0
-            chunks = []
-            async for chunk in resp.content.iter_chunked(1024):
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total += len(chunk)
-                if total > size_limit:
-                    if DEBUG_FETCH:
-                        logger.debug(f"download exceeded limit {size_limit} for {url}")
-                    return None, ctype
-            return b"".join(chunks), ctype
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"GET exception for {url}: {e}")
-        return None, None
-
-async def fetch_from_waifu_pics(session, positive):
-    try:
-        category = map_tag_for_provider("waifu_pics", positive)
-        url = f"https://api.waifu.pics/sfw/{quote_plus(category)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu_pics sfw {category} -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (category or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
-            return gif_url, f"waifu_pics_{category}", payload
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_pics error: {e}")
-        return None, None, None
-
-async def fetch_from_waifu_im(session, positive):
-    try:
-        q = map_tag_for_provider("waifu_im", positive)
-        base = "https://api.waifu.im/search"
-        params = {"included_tags": q, "is_nsfw": "false", "limit": 8}
-        headers = {}
-        if WAIFUIM_API_KEY:
-            headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
-        async with session.get(base, params=params, headers=headers or None, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu.im sfw search -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
-            img = random.choice(images)
-            gif_url = img.get("url") or img.get("image") or img.get("src")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(img) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(str(img.get("tags", "")), GIF_TAGS, data)
-            return gif_url, f"waifu_im_{q}", img
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_im error: {e}")
-        return None, None, None
-
-async def fetch_from_waifu_it(session, positive):
-    try:
-        if not WAIFUIT_API_KEY:
-            if DEBUG_FETCH:
-                logger.debug("waifu.it skipped: key missing")
-            return None, None, None
-        q = map_tag_for_provider("waifu_it", positive)
-        endpoint = f"https://waifu.it/api/v4/{quote_plus(q)}"
-        headers = {"Authorization": WAIFUIT_API_KEY}
-        async with session.get(endpoint, headers=headers, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"waifu.it {endpoint} -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image") or (payload.get("data") and payload["data"].get("url"))
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
-            return gif_url, f"waifu_it_{q}", payload
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_waifu_it error: {e}")
-        return None, None, None
-
-async def fetch_from_nekos_best(session, positive):
-    try:
-        q = map_tag_for_provider("nekos_best", positive)
-        url = f"https://nekos.best/api/v2/{quote_plus(q)}?amount=1"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.best {q} -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            results = payload.get("results") or []
-            if not results:
-                return None, None, None
-            r = results[0]
-            gif_url = r.get("url") or r.get("file") or r.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(r) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(r), GIF_TAGS, data)
-            return gif_url, f"nekos_best_{q}", r
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_best error: {e}")
-        return None, None, None
-
-async def fetch_from_nekos_life(session, positive):
-    try:
-        q = map_tag_for_provider("nekos_life", positive)
-        url = f"https://nekos.life/api/v2/img/{quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.life {q} -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image") or payload.get("result")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
-            return gif_url, f"nekos_life_{q}", payload
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_life error: {e}")
-        return None, None, None
-
-async def fetch_from_nekos_moe(session, positive):
-    try:
-        q = map_tag_for_provider("nekos_moe", positive)
-        url = f"https://nekos.moe/api/v3/gif/random?tag={quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"nekos.moe -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            images = payload.get("images") or payload.get("data") or []
-            if not images:
-                return None, None, None
-            item = random.choice(images)
-            gif_url = item.get("file") or item.get("url") or item.get("original") or item.get("image")
-            if not gif_url and item.get("id"):
-                gif_url = f"https://nekos.moe/image/{item['id']}.gif"
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(item) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(item), GIF_TAGS, data)
-            return gif_url, f"nekos_moe_{q}", item
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_nekos_moe error: {e}")
-        return None, None, None
-
-async def fetch_from_otakugifs(session, positive):
-    try:
-        q = map_tag_for_provider("otakugifs", positive)
-        valid_reactions = ["kiss", "hug", "slap", "punch", "wink", "dance", "cuddle", "poke"]
-        reaction = "kiss"
-        for v in valid_reactions:
-            if v in q:
-                reaction = v
-                break
-        url = f"https://otakugifs.xyz/api/gif?reaction={quote_plus(reaction)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"otakugifs -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("gif") or payload.get("file")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
-            return gif_url, f"otakugifs_{reaction}", payload
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_otakugifs error: {e}")
-        return None, None, None
-
-async def fetch_from_animegirls_online(session, positive):
-    try:
-        q = map_tag_for_provider("animegirls_online", positive)
-        url = f"https://animegirls.online/api/random?tag={quote_plus(q)}"
-        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"animegirls_online -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            gif_url = payload.get("url") or payload.get("image")
-            if not gif_url or filename_has_block_keyword(gif_url):
-                return None, None, None
-            if contains_illegal_indicators(json.dumps(payload) + " " + (q or "")):
-                return None, None, None
-            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
-            return gif_url, f"animegirls_online_{q}", payload
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_animegirls_online error: {e}")
-        return None, None, None
-
-async def fetch_from_danbooru(session, positive):
-    try:
-        q = map_tag_for_provider("danbooru_safe", positive)
-        tags = f"{q} rating:safe"
-        url = "https://danbooru.donmai.us/posts.json"
-        params = {"tags": tags, "limit": 50}
-        auth = None
-        if DANBOORU_USER and DANBOORU_API_KEY:
-            auth = aiohttp.BasicAuth(DANBOORU_USER, DANBOORU_API_KEY)
-        async with session.get(url, params=params, timeout=REQUEST_TIMEOUT, auth=auth) as resp:
-            if resp.status != 200:
-                if DEBUG_FETCH:
-                    logger.debug(f"danbooru -> {resp.status}")
-                return None, None, None
-            payload = await resp.json()
-            if not payload:
-                return None, None, None
-            random.shuffle(payload)
-            for item in payload:
-                tags_text = item.get("tag_string", "") or item.get("tag_string_general", "")
-                if _tag_is_disallowed(tags_text):
-                    continue
-                gif_url = item.get("file_url") or item.get("large_file_url") or item.get("source")
-                if not gif_url or filename_has_block_keyword(gif_url):
-                    continue
-                if contains_illegal_indicators(json.dumps(item) + " " + (q or "")):
-                    continue
-                extract_and_add_tags_from_meta(tags_text, GIF_TAGS, data)
-                return gif_url, f"danbooru_{q}", item
-            return None, None, None
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"fetch_from_danbooru error: {e}")
-        return None, None, None
-
-PROVIDER_FETCHERS = {
-    "waifu_pics": fetch_from_waifu_pics,
-    "waifu_im": fetch_from_waifu_im,
-    "waifu_it": fetch_from_waifu_it,
-    "nekos_best": fetch_from_nekos_best,
-    "nekos_life": fetch_from_nekos_life,
-    "nekos_moe": fetch_from_nekos_moe,
-    "nekoapi": fetch_from_nekos_moe,
-    "otakugifs": fetch_from_otakugifs,
-    "animegirls_online": fetch_from_animegirls_online,
-    "danbooru": fetch_from_danbooru
-}
-
-_provider_cycle_deque = deque()
-_last_cycle_refresh = None
-
-def build_provider_pool():
-    providers = [p for p in PROVIDER_FETCHERS.keys()]
-    available = []
-    for p in providers:
-        w = int(data.get("provider_weights", {}).get(p, 1) or 1)
-        if w <= 0:
-            continue
-        available.append(p)
-    if not available:
-        return []
-    if TRUE_RANDOM:
-        random.shuffle(available)
-        return available
-    global _provider_cycle_deque, _last_cycle_refresh
-    now = datetime.now(timezone.utc)
-    if not _provider_cycle_deque or (_last_cycle_refresh and (now - _last_cycle_refresh) > timedelta(minutes=15)):
-        random.shuffle(available)
-        _provider_cycle_deque = deque(available)
-        _last_cycle_refresh = now
-        if DEBUG_FETCH:
-            logger.debug(f"Provider cycle (refreshed): {_provider_cycle_deque}")
-    else:
-        current = set(_provider_cycle_deque)
-        if set(available) != current:
-            random.shuffle(available)
-            _provider_cycle_deque = deque(available)
-            _last_cycle_refresh = now
-            if DEBUG_FETCH:
-                logger.debug(f"Provider cycle (rebuild): {_provider_cycle_deque}")
-    return list(_provider_cycle_deque)
-
-async def attempt_get_media_bytes(session, gif_url):
-    if not gif_url:
-        return None, None, "no-url"
-    if contains_illegal_indicators(gif_url):
-        return None, None, "illegal-indicator-in-url"
-    status, headers = await _head_url(session, gif_url)
-    if status is None:
-        b, ctype = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
-        if b:
-            return b, ctype, "downloaded-after-head-failed"
-        return None, ctype, "head-failed-get-failed"
-    if status not in (200, 301, 302):
-        b, ctype = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
-        if b:
-            return b, ctype, f"get-after-head-{status}"
-        return None, ctype, f"head-{status}-get-failed"
-    cl = headers.get("Content-Length") or headers.get("content-length")
-    ctype = headers.get("Content-Type") or headers.get("content-type") or ""
-    if cl:
-        try:
-            clv = int(cl)
-            if clv > HEAD_SIZE_LIMIT:
-                return None, ctype, f"too-large-head-{clv}"
-            b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
-            if b:
-                return b, ctype2 or ctype, "downloaded-with-head-size"
-            return None, ctype2 or ctype, "head-said-small-but-get-failed"
-        except Exception:
-            b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
-            if b:
-                return b, ctype2 or ctype, "downloaded-with-head-parse-except"
-            return None, ctype2 or ctype, "head-parse-get-failed"
-    else:
-        b, ctype2 = await _download_bytes_with_limit(session, gif_url, size_limit=HEAD_SIZE_LIMIT)
-        if b:
-            return b, ctype2 or ctype, "downloaded-unknown-size"
-        return None, ctype2 or ctype, "unknown-size-get-failed-or-too-large"
-
-async def fetch_gif(user_id):
-    user_key = str(user_id)
-    sent_hashes = set(data.get("sent_history", {}).get(user_key, []))
-    providers = build_provider_pool()
-    if not providers:
-        if DEBUG_FETCH:
-            logger.debug("No providers available.")
-        return None, None, None, None
-    async with aiohttp.ClientSession() as session:
-        attempt = 0
-        while attempt < FETCH_ATTEMPTS:
-            attempt += 1
-            if TRUE_RANDOM:
-                provider = random.choice(providers)
-            else:
-                global _provider_cycle_deque, _last_cycle_refresh
-                if not _provider_cycle_deque:
-                    _provider_cycle_deque = deque(build_provider_pool())
-                if not _provider_cycle_deque:
-                    return None, None, None, None
-                provider = _provider_cycle_deque.popleft()
-                _provider_cycle_deque.append(provider)
-            pool = PROVIDER_TERMS.get(provider)
-            positive = random.choice(pool) if pool else random.choice(GIF_TAGS)
-            if DEBUG_FETCH:
-                logger.debug(f"[fetch_gif] attempt {attempt}/{FETCH_ATTEMPTS} provider={provider} positive='{positive}'")
-            fetcher = PROVIDER_FETCHERS.get(provider)
-            if not fetcher:
-                continue
-            try:
-                gif_url, name_hint, meta = await fetcher(session, positive)
-            except Exception as e:
-                if DEBUG_FETCH:
-                    logger.debug(f"Fetcher exception for {provider}: {e}")
-                continue
-            if not gif_url:
-                if DEBUG_FETCH:
-                    logger.debug(f"{provider} returned no url.")
-                continue
-            if filename_has_block_keyword(gif_url):
-                continue
-            if contains_illegal_indicators((gif_url or "") + " " + (str(meta) or "")):
-                continue
-            if _tag_is_disallowed(str(meta or "")):
-                continue
-            gif_hash = hashlib.sha1((gif_url or name_hint or "").encode()).hexdigest()
-            if gif_hash in sent_hashes:
-                if DEBUG_FETCH:
-                    logger.debug(f"Already sent gif hash for {gif_url}; skipping.")
-                continue
-            b, ctype, reason = await attempt_get_media_bytes(session, gif_url)
-            if DEBUG_FETCH:
-                logger.debug(f"attempt_get_media_bytes -> provider={provider} url={gif_url} reason={reason} bytes_ok={bool(b)} ctype={ctype}")
-            if b:
-                ext = ""
-                try:
-                    parsed = urlparse(gif_url)
-                    ext = os.path.splitext(parsed.path)[1] or ".gif"
-                    if len(ext) > 6:
-                        ext = ".gif"
-                except Exception:
-                    ext = ".gif"
-                name = f"{provider}_{hashlib.sha1(gif_url.encode()).hexdigest()[:10]}{ext}"
-                return b, name, gif_url, ctype
-            else:
-                return None, None, gif_url, ctype
-        if DEBUG_FETCH:
-            logger.debug("fetch_gif exhausted attempts.")
-        return None, None, None, None
-
-def try_compress_bytes(b, ctype, max_size):
-    if not b or not Image:
-        return None
-    try:
-        buf = io.BytesIO(b)
-        img = Image.open(buf)
-        fmt = img.format or "GIF"
-        if fmt.upper() in ("GIF", "WEBP"):
-            frames = [frame.copy().convert("RGBA") for frame in ImageSequence.Iterator(img)]
-            w, h = frames[0].size
-            for pct in [0.95 ** i for i in range(1, 13)]:
-                out = io.BytesIO()
-                new_size = (max(1, int(w * pct)), max(1, int(h * pct)))
-                resized = [fr.resize(new_size, Image.LANCZOS) for fr in frames]
-                try:
-                    resized[0].save(out, format="GIF", save_all=True, append_images=resized[1:], optimize=True, loop=0)
-                except Exception:
-                    try:
-                        resized[0].save(out, format="GIF", save_all=True, append_images=resized[1:], loop=0)
-                    except Exception:
-                        out = None
-                if out and out.getbuffer().nbytes <= max_size:
-                    return out.getvalue()
-            return None
-        else:
-            w, h = img.size
-            for pct in [0.95 ** i for i in range(1, 13)]:
-                out = io.BytesIO()
-                new_size = (max(1, int(w * pct)), max(1, int(h * pct)))
-                img2 = img.resize(new_size, Image.LANCZOS)
-                if fmt.upper() in ("JPEG", "JPG"):
-                    img2.save(out, format="JPEG", quality=85, optimize=True)
-                else:
-                    img2.save(out, format="PNG", optimize=True)
-                if out.getbuffer().nbytes <= max_size:
-                    return out.getvalue()
-            return None
-    except Exception as e:
-        if DEBUG_FETCH:
-            logger.debug(f"compression failed: {e}")
-        return None
-
-def make_embed(title, desc, member, kind="join", count=None):
-    color = discord.Color.blue() if kind == "join" else discord.Color.dark_gray()
-    embed = discord.Embed(title=title, description=desc, color=color, timestamp=datetime.now(timezone.utc))
-    try:
-        embed.set_thumbnail(url=member.display_avatar.url)
-    except Exception:
-        pass
-    footer = f"{member.display_name} • {member.id}"
-    if count:
-        footer += f" • Joins: {count}"
-    embed.set_footer(text=footer)
-    return embed
-
-async def record_sent_for_user(member_id, gif_url):
-    try:
-        if not gif_url:
-            return
-        user_key = str(member_id)
-        gif_hash = hashlib.sha1(gif_url.encode()).hexdigest()
-        sent = data.setdefault("sent_history", {}).setdefault(user_key, [])
-        if gif_hash in sent:
-            return
-        sent.append(gif_hash)
-        if len(sent) > MAX_USED_GIFS_PER_USER:
-            del sent[:len(sent) - MAX_USED_GIFS_PER_USER]
-        data["sent_history"][user_key] = sent
-        try:
-            with open(DATA_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-async def send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url, ctype=None):
-    max_upload = DISCORD_MAX_UPLOAD
-    sent_success = False
-    try:
-        if gif_bytes and len(gif_bytes) <= max_upload:
-            try:
-                file_server = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                embed.set_image(url=f"attachment://{gif_name}")
-                if text_channel:
-                    await text_channel.send(embed=embed, file=file_server)
-                sent_success = True
-            except Exception:
-                if text_channel:
-                    if gif_url and gif_url not in (embed.description or ""):
-                        embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
-                    await text_channel.send(embed=embed)
-                    sent_success = True
-            try:
-                dm_file = discord.File(io.BytesIO(gif_bytes), filename=gif_name)
-                await member.send(embed=embed, file=dm_file)
-            except Exception:
-                try:
-                    dm_embed = make_embed(embed.title or "Media", embed.description or "", member, kind="join")
-                    if gif_url and gif_url not in (dm_embed.description or ""):
-                        dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
-                    await member.send(dm_embed)
-                except Exception:
-                    pass
-        else:
-            if gif_bytes:
-                compressed = try_compress_bytes(gif_bytes, ctype, max_upload)
-                if compressed and len(compressed) <= max_upload:
-                    try:
-                        file_server = discord.File(io.BytesIO(compressed), filename=gif_name)
-                        embed.set_image(url=f"attachment://{gif_name}")
-                        if text_channel:
-                            await text_channel.send(embed=embed, file=file_server)
-                        sent_success = True
-                    except Exception:
-                        if text_channel:
-                            if gif_url and gif_url not in (embed.description or ""):
-                                embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
-                            await text_channel.send(embed=embed)
-                            sent_success = True
-                    try:
-                        dm_file = discord.File(io.BytesIO(compressed), filename=gif_name)
-                        await member.send(embed=embed, file=dm_file)
-                    except Exception:
-                        try:
-                            dm_embed = make_embed(embed.title or "Media", embed.description or "", member, kind="join")
-                            if gif_url and gif_url not in (dm_embed.description or ""):
-                                dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
-                            await member.send(dm_embed)
-                        except Exception:
-                            pass
-                    if sent_success:
-                        await record_sent_for_user(member.id, gif_url)
-                    return
-            if gif_url:
-                if gif_url not in (embed.description or ""):
-                    embed.description = (embed.description or "") + f"\n\n[View media here]({gif_url})"
-            if text_channel:
-                await text_channel.send(embed=embed)
-                sent_success = True
-            try:
-                dm_embed = make_embed(embed.title or "Media", embed.description or "", member, kind="join")
-                if gif_url and gif_url not in (dm_embed.description or ""):
-                    dm_embed.description = (dm_embed.description or "") + f"\n\n[View media here]({gif_url})"
-                await member.send(dm_embed)
-            except Exception:
-                pass
-    except Exception as e:
-        logger.warning(f"unexpected error in send_embed_with_media: {e}")
-        try:
-            if text_channel:
-                await text_channel.send(embed=embed)
-                sent_success = True
-            await member.send(embed=embed)
-        except Exception:
-            pass
-    if sent_success and gif_url:
-        await record_sent_for_user(member.id, gif_url)
 
 JOIN_GREETINGS = [
     "🌸 {display_name} sashays into the scene — waifu energy rising!",
@@ -791,40 +78,61 @@ JOIN_GREETINGS = [
     "🌙 {display_name} arrives — moonlight + waifu vibes.",
     "🦊 {display_name} has joined — foxiness overload.",
     "💃 {display_name} joined — shake it, waifu style.",
-    "🍒 {display_name} showed up — cherry cheeks and smiles.",
+    "🎴 {display_name} appears — draw that lucky card, baby.",
+    "🍡 {display_name} came — sweet, tempting, and blushing.",
     "🌶️ {display_name} arrived — a little spice never hurt.",
-    "🏖️ {display_name} joins — beach bikini and sun-kissed waifu.",
-    "🎶 {display_name} joined — soundtrack: heartbeat & blush.",
-    "🧋 {display_name} stepped in — sweet bubble tea energy.",
     "🪩 {display_name} joined — ready to party and flirt.",
     "👑 {display_name} enters — royalty of the flirty league.",
     "🌺 {display_name} joined — flowers + flirts incoming.",
+    "🍑 Thicc vibes as {display_name} arrives.",
+    "✨ Stars twinkle — {display_name} is here to slay.",
     "🥂 {display_name} has entered — cheers to the waifu life.",
     "🫠 {display_name} joined — melting hearts left and right.",
-    "🎯 {display_name} arrived — hit the target of cuteness.",
-    "🧸 {display_name} enters — soft hugs and soft waifus.",
-    "💌 {display_name} arrived — a love letter in motion.",
-    "🔮 {display_name} joined — destiny's delightful twist.",
-    "🕊️ {display_name} appears — gentle flirts incoming.",
-    "📸 {display_name} walks in — strike a pose, darling.",
-    "🥳 {display_name} joined — confetti, smiles, and thigh-highs.",
-    "🧿 {display_name} arrived — protective charm, playful grin.",
+    "🎯 {display_name} arrived — hit the target of spiciness.",
+    "🧋 {display_name} stepped in — sweet bubble tea energy.",
     "🏮 {display_name} joins — festival of flirty faces.",
     "🫦 {display_name} entered — pouty lips and big eyes.",
     "🎐 {display_name} arrives — wind chimes and winks.",
     "🌟 {display_name} joined — glitter and glances.",
     "🛸 {display_name} beamed down — alien waifu confirmed.",
     "🌈 {display_name} arrives — color me smitten.",
-    "🍓 {display_name} joined — strawberry-sweet smiles.",
+    "🍒 {display_name} showed up — cherry cheeks and smiles.",
     "🪄 {display_name} joined — magic of a thousand blushes.",
-    "🪶 {display_name} stepped in lightly — feathers and grace.",
-    "🎭 {display_name} arrived — masks on, charm up.",
+    "🧸 {display_name} enters — soft hugs and soft waifus.",
+    "💌 {display_name} arrived — a love letter in motion.",
+    "🔮 {display_name} joined — destiny's spicy twist.",
+    "🕊️ {display_name} appears — gentle flirts incoming.",
+    "📸 {display_name} walks in — strike a pose, darling.",
+    "🥳 {display_name} joined — confetti, smiles, and thigh-highs.",
+    "🧿 {display_name} arrived — protective charm, seductive grin.",
+    "🏖️ {display_name} joins — beach bikini and sun-kissed waifu.",
+    "🚀 {display_name} enters — lift off to flirt space.",
+    "🎶 {display_name} joined — soundtrack: heartbeat & blush.",
+    "🍯 {display_name} walks in — sticky-sweet charm detected.",
+    "🧁 {display_name} joined — sugar-coated shenanigans.",
+    "💎 {display_name} arrives — gem-bright and cheeky.",
     "🩰 {display_name} joined — tutu twirls and coy winks.",
-    "🦄 {display_name} enters — mythical waifu shimmer.",
+    "🦄 {display_name} enters — magical waifu shimmer.",
     "🌊 {display_name} arrives — waves of flirtation.",
+    "🍓 {display_name} joined — strawberry-sweet smiles.",
+    "🎈 {display_name} appears — balloon pop of attention.",
+    "🌿 {display_name} entered — herb-scented flirty breeze.",
+    "🧩 {display_name} joined — puzzlingly cute moves.",
+    "🧬 {display_name} arrived — genetically optimized charm.",
+    "🌓 {display_name} joins — half-moon, full tease.",
+    "📚 {display_name} enters — scholarly seduction.",
+    "🏵️ {display_name} arrived — floral blush and mischief.",
+    "🛁 {display_name} joined — steam, suds, and soft glances.",
+    "🧨 {display_name} appears — explosive cuteness.",
+    "🦋 {display_name} joined — fluttering lashes and coy smiles.",
+    "🥀 {display_name} enters — rosy petals and low-key spice.",
     "🍫 {display_name} arrived — chocolatey charm unlocked.",
     "🍷 {display_name} joined — sip, smile, sway.",
     "🪙 {display_name} appears — a coin-flip of choices: flirt or tease?",
+    "🧭 {display_name} arrived — compass points to cute.",
+    "🪴 {display_name} joined — potted waifu energy.",
+    "🗝️ {display_name} enters — key to your heart (maybe!).",
+    "🛍️ {display_name} arrived — shopping bags full of sass.",
     "🧶 {display_name} joins — knitted charm and warm hugs.",
     "🧥 {display_name} entered — coat-swathe and smolder.",
     "🩸 {display_name} joined — whisper of dramatic flair.",
@@ -839,45 +147,15 @@ JOIN_GREETINGS = [
     "🔔 {display_name} joined — ding-ding! look here!",
     "🎤 {display_name} enters — sing, sway, seduce.",
     "⛩️ {display_name} joined — torii gate to waifu heaven.",
-    "🏵️ {display_name} arrived — floral blush and mischief.",
-    "🛁 {display_name} joined — steam, suds, and soft glances.",
-    "🧨 {display_name} appears — spark of playfulness.",
-    "🦋 {display_name} joined — fluttering lashes and coy smiles.",
-    "🥀 {display_name} enters — rosy petals and low-key spice.",
-    "🪄 {display_name} arrived — spellbound cuteness.",
-    "🧁 {display_name} joined — sugar-coated shenanigans.",
-    "🔮 {display_name} joined — a little fate, a little flirt.",
-    "🧿 {display_name} arrived — charm, wink, repeat.",
-    "🎈 {display_name} appears — balloon pop of attention.",
-    "🌿 {display_name} entered — herb-scented flirty breeze.",
-    "🧩 {display_name} joined — puzzlingly cute moves.",
-    "🧬 {display_name} arrived — genetically optimized charm.",
-    "🌓 {display_name} joins — half-moon, full tease.",
-    "📚 {display_name} enters — scholarly seduction.",
-    "🏝️ {display_name} arrived — island vibes and flirty tides.",
-    "🛍️ {display_name} arrived — shopping bags full of sass.",
-    "🧸 {display_name} stepped in — plush and perfect.",
-    "🎯 {display_name} arrived — aim: flirt; status: hit.",
-    "🫧 {display_name} joins — bubbles, giggles, smiles.",
-    "🧭 {display_name} arrived — compass points to cute.",
-    "🔭 {display_name} joined — stargazer of adorable looks.",
-    "🪵 {display_name} entered — rustic charm and a wink.",
-    "🧼 {display_name} joined — squeaky-clean sweetness.",
-    "🕯️ {display_name} joined — candlelight and coy glances.",
-    "🪻 {display_name} arrives — delicate petal energy.",
-    "⚖️ {display_name} entered — balance of mischief and manners.",
-    "🗝️ {display_name} unlocked the room — keys + charm.",
-    "🎮 {display_name} joined — game on, hearts at risk.",
-    "🌌 {display_name} arrives — cosmic cuteness engaged.",
-    "🎨 {display_name} walked in — brushstrokes of charm.",
-    "🏺 {display_name} arrived — antique allure present.",
-    "🛡️ {display_name} joins — noble grin and playful eyes.",
-    "🧱 {display_name} arrived — bricks of soft banter.",
-    "📀 {display_name} appeared — retro vibes and winks.",
-    "🪬 {display_name} joined — lucky talisman of flirt."
+    "🏮 {display_name} appears — lantern-lit flirtation.",
+    "🧚 {display_name} joined — fairy winks and mischief.",
+    "🌸 {display_name} steps in — blossom & blush combo.",
+    "😽 {display_name} joined — cat-like charm engaged.",
+    "🥂 {display_name} arrived — cheers to cheeky times.",
+    "🩰 {display_name} steps in — ballet blush style.",
+    "🧋 {display_name} walked in — boba and flirty vibes.",
+    "🪄 {display_name} arrived — spellbound cuteness."
 ]
-while len(JOIN_GREETINGS) < 100:
-    JOIN_GREETINGS.append(random.choice(JOIN_GREETINGS))
 
 LEAVE_GREETINGS = [
     "🌙 {display_name} drifts away — the moon hushes a little.",
@@ -935,6 +213,8 @@ LEAVE_GREETINGS = [
     "🕶️ {display_name} left — shades down and gone.",
     "🔔 {display_name} departed — bell tolls faintly.",
     "📸 {display_name} left — last frame a smirk.",
+    "🪙 {display_name} left — coin flicked into the void.",
+    "🧩 {display_name} walked off — puzzle missing a piece.",
     "🪞 {display_name} left — reflection smiles alone.",
     "🌸 {display_name} drifted away — petals to the wind.",
     "💌 {display_name} left — letter sealed and mailed.",
@@ -946,136 +226,539 @@ LEAVE_GREETINGS = [
     "🧨 {display_name} vanished — sparkles died down.",
     "🛏️ {display_name} left — nap time continues elsewhere.",
     "🪶 {display_name} left — feather trails behind.",
-    "🛸 {display_name} left — alien waifu gone.",
-    "🪻 {display_name} departed — scent of petals lingers.",
-    "🧩 {display_name} walked off — puzzle missing a piece.",
-    "🪵 {display_name} left — rustic hush returns.",
-    "📀 {display_name} left — spinning vinyl fades.",
-    "🔭 {display_name} departed — telescope shutter closes.",
-    "🧼 {display_name} left — soap bubbles popped.",
-    "🛡️ {display_name} left — knightly grin in memory.",
-    "📚 {display_name} closed the book and left.",
-    "🎨 {display_name} left — paint dries, smile remains.",
-    "🏺 {display_name} left — vase gently set down.",
-    "☕ {display_name} left — last sip warm and sweet.",
-    "🧂 {display_name} left — a pinch of seasoning in the air.",
-    "🕯️ {display_name} left — candle lowered, lights dim.",
-    "🧵 {display_name} left — threads unwind softly.",
-    "🌾 {display_name} left — wheat fields whisper.",
-    "🪣 {display_name} left — mop rests, memories wet.",
-    "🧮 {display_name} left — beads still counting smiles.",
-    "🪙 {display_name} departed — coin tumbled into pocket.",
-    "🧭 {display_name} left — compass returns to neutral.",
-    "🦢 {display_name} glided away — graceful and gone.",
-    "🍂 {display_name} drifted — autumn hush.",
-    "🪁 {display_name} floated off — string untied.",
-    "🎈 {display_name} popped away — balloon gone.",
-    "🧸 {display_name} tucked away — plush and quiet.",
-    "🛼 {display_name} skated off — rhythm fades.",
-    "🎒 {display_name} left — backpack zipped, off they go.",
-    "🧯 {display_name} left — small sparkles cooled."
+    "🛸 {display_name} left — alien waifu gone."
 ]
-while len(LEAVE_GREETINGS) < 40:
-    LEAVE_GREETINGS.append(random.choice(LEAVE_GREETINGS))
+
+def _normalize_text(s: str) -> str:
+    return "" if not s else re.sub(r'[\s\-_]+', ' ', s.lower())
+
+def _tag_is_disallowed(t: str) -> bool:
+    if not t:
+        return True
+    t = t.lower()
+    if any(b in t for b in ILLEGAL_TAGS):
+        return True
+    if any(ex in t for ex in EXCLUDE_TAGS):
+        return True
+    if any(bl in t for bl in BLOCKED_TAGS):
+        return True
+    return False
+
+def contains_illegal_indicators(text: str) -> bool:
+    if not text or not isinstance(text, str):
+        return False
+    normalized = _normalize_text(text)
+    for bad in ILLEGAL_TAGS:
+        if bad in normalized:
+            return True
+    for blocked in BLOCKED_TAGS:
+        if blocked in normalized:
+            return True
+    return False
+
+def filename_has_block_keyword(url: str) -> bool:
+    if not url:
+        return False
+    low = url.lower()
+    return any(kw in low for kw in FILENAME_BLOCK_KEYWORDS)
+
+def _dedupe_preserve_order(lst):
+    seen = set()
+    out = []
+    for x in lst:
+        if not isinstance(x, str):
+            continue
+        nx = x.strip().lower()
+        if not nx or nx in seen:
+            continue
+        seen.add(nx)
+        out.append(nx)
+    return out
+
+def add_tag_to_gif_tags(tag: str, GIF_TAGS, data_save):
+    if not tag or not isinstance(tag, str):
+        return False
+    t = tag.strip().lower()
+    if len(t) < 3 or t in GIF_TAGS or _tag_is_disallowed(t):
+        return False
+    GIF_TAGS.append(t)
+    data_save["gif_tags"] = _dedupe_preserve_order(data_save.get("gif_tags", []) + [t])
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(data_save, f, indent=2)
+    except Exception:
+        pass
+    logger.debug(f"learned tag: {t}")
+    return True
+
+def extract_and_add_tags_from_meta(meta_text: str, GIF_TAGS, data_save):
+    if not meta_text:
+        return
+    text = _normalize_text(meta_text)
+    tokens = _token_split_re.split(text)
+    for tok in tokens:
+        tok = tok.strip()
+        if not tok or tok.isdigit() or len(tok) < 3:
+            continue
+        add_tag_to_gif_tags(tok, GIF_TAGS, data_save)
+
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"provider_weights": {}, "sent_history": {}, "gif_tags": [], "vc_state": {}}, f, indent=2)
+
+with open(DATA_FILE, "r") as f:
+    data = json.load(f)
+
+data.setdefault("provider_weights", {})
+data.setdefault("sent_history", {})
+data.setdefault("gif_tags", [])
+data.setdefault("vc_state", {})
+
+_seed_gif_tags = [
+    "waifu", "neko", "kawaii", "cute", "smile", "blush", "ecchi", "suggestive",
+    "bikini", "swimsuit", "lingerie", "underwear", "panties", "bra",
+    "thighs", "thick_thighs", "thicc", "legs", "stockings", "thighhighs", "garter_belt",
+    "cleavage", "big_breasts", "huge_breasts", "oppai", "breast_focus", "boobs",
+    "underboob", "sideboob", "cleavage_cutout", "breast_squeeze",
+    "ass", "butt", "big_ass", "ass_focus", "tight_clothes",
+    "skirt_lift", "shirt_lift", "clothes_lift", "upskirt", "panty_shot",
+    "see_through", "transparent", "wet", "wet_clothes", "sweaty",
+    "revealing_clothes", "micro_bikini", "string_bikini", "slingshot_swimsuit",
+    "leotard", "bodysuit", "gym_uniform", "sports_bra", "sportswear",
+    "maid", "bunny_girl", "playboy_bunny", "bunny_ears", "animal_ears",
+    "catgirl", "cat_ears", "tail", "kemonomimi", "fox_girl", "fox_ears",
+    "seductive", "seductive_smile", "bedroom_eyes", "flirty", "teasing",
+    "blushing", "embarrassed", "shy", "surprised", "aroused_face",
+    "pose", "seductive_pose", "sitting", "lying", "on_back", "on_stomach",
+    "bent_over", "all_fours", "arched_back", "stretching",
+    "spread_legs", "legs_apart", "m_legs", "open_legs", "legs_up",
+    "towel", "bath_towel", "bathing", "shower", "wet_hair", "after_bath",
+    "bedroom", "bed", "pillow", "lying_on_bed", "on_bed",
+    "beach", "poolside", "pool", "summer", "tan", "tanned", "dark_skin",
+    "midriff", "navel", "stomach", "abs", "toned", "athletic",
+    "armpits", "armpit_focus", "arms_up", "arms_behind_head",
+    "curvy", "voluptuous", "hourglass_figure", "wide_hips",
+    "short_shorts", "hot_pants", "daisy_dukes", "denim_shorts",
+    "miniskirt", "micro_skirt", "pleated_skirt", "pencil_skirt",
+    "fishnet", "fishnet_stockings", "fishnet_thighhighs", "garter_straps",
+    "lace", "lace_trim", "lace_panties", "lace_bra", "frills",
+    "ribbon", "bow", "hair_ribbon", "neck_ribbon",
+    "choker", "collar", "necklace", "jewelry", "earrings",
+    "glasses", "megane", "sunglasses", "eyewear",
+    "high_heels", "heels", "stiletto", "boots", "thigh_boots",
+    "gloves", "elbow_gloves", "fingerless_gloves",
+    "blonde", "brunette", "redhead", "pink_hair", "purple_hair", "blue_hair",
+    "long_hair", "short_hair", "twintails", "ponytail", "pigtails",
+    "idol", "singer", "performer", "stage", "concert",
+    "cheerleader", "cheerleading", "pom_poms",
+    "nurse", "teacher", "secretary", "office_lady", "business_suit",
+    "school_uniform", "sailor_uniform", "serafuku",
+    "yoga", "yoga_pants", "exercise", "workout", "gym",
+    "sleeping", "sleepy", "yawning", "waking_up", "stretching",
+    "eating", "drinking", "popsicle", "ice_cream", "lollipop",
+    "looking_at_viewer", "looking_back", "from_behind", "from_below", "from_above",
+    "wink", "smiling", "grin", "happy", "playful",
+    "multiple_girls", "2girls", "3girls", "yuri", "girl_on_girl", "lesbian",
+    "angel", "demon", "succubus", "demon_girl", "horns", "wings", "halo",
+    "elf", "elf_ears", "pointy_ears", "dark_elf",
+    "monster_girl", "slime_girl", "lamia", "harpy",
+    "mermaid", "underwater", "water", "bubbles"
+]
+
+persisted = _dedupe_preserve_order(data.get("gif_tags", []))
+seed = _dedupe_preserve_order(_seed_gif_tags)
+combined = seed + [t for t in persisted if t not in seed]
+GIF_TAGS = [t for t in _dedupe_preserve_order(combined) if not _tag_is_disallowed(t)]
+if not GIF_TAGS:
+    GIF_TAGS = ["waifu", "ecchi"]
+
+def save_data():
+    try:
+        data["gif_tags"] = GIF_TAGS
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"save failed: {e}")
+
+@tasks.loop(seconds=AUTOSAVE_INTERVAL)
+async def autosave_task():
+    try:
+        save_data()
+    except Exception as e:
+        logger.warning(f"Autosave failed: {e}")
+
+PROVIDER_TERMS = {
+    "waifu_pics": ["waifu", "neko"],
+    "waifu_im": ["ecchi", "ero", "oppai", "selfies", "uniform", "maid"],
+    "nekos_best": ["neko", "waifu", "kitsune", "husbando"],
+    "danbooru": ["ecchi", "bikini", "swimsuit", "cleavage", "thighs", "ass", "breasts", "panties", "lingerie"],
+    "gelbooru": ["ecchi", "bikini", "swimsuit", "panties", "thighs", "cleavage", "upskirt"],
+}
+
+def map_tag_for_provider(provider: str, tag: str) -> str:
+    t = (tag or "").lower().strip()
+    pool = PROVIDER_TERMS.get(provider, [])
+    if t:
+        for p in pool:
+            if p in t:
+                return p
+    if pool:
+        return random.choice(pool)
+    return t or "waifu"
+
+async def _download_bytes_with_limit(session, url, size_limit=HEAD_SIZE_LIMIT, timeout=REQUEST_TIMEOUT):
+    try:
+        async with session.get(url, timeout=timeout, allow_redirects=True) as resp:
+            if resp.status != 200:
+                if DEBUG_FETCH: logger.debug(f"GET {url} returned {resp.status}")
+                return None, None
+            ctype = resp.content_type or ""
+            total = 0
+            chunks = []
+            async for chunk in resp.content.iter_chunked(1024):
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > size_limit:
+                    if DEBUG_FETCH: logger.debug(f"download exceeded limit {size_limit} for {url}")
+                    return None, ctype
+            return b"".join(chunks), ctype
+    except Exception as e:
+        if DEBUG_FETCH: logger.debug(f"GET exception for {url}: {e}")
+        return None, None
+
+async def fetch_from_waifu_pics(session, positive):
+    try:
+        category = map_tag_for_provider("waifu_pics", positive)
+        url = f"https://api.waifu.pics/sfw/{quote_plus(category)}"
+        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200:
+                if DEBUG_FETCH: logger.debug(f"waifu_pics sfw {category} -> {resp.status}")
+                return None, None, None
+            payload = await resp.json()
+            gif_url = payload.get("url") or payload.get("image")
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(payload) + " " + (category or "")): return None, None, None
+            extract_and_add_tags_from_meta(json.dumps(payload), GIF_TAGS, data)
+            return gif_url, f"waifu_pics_{category}", payload
+    except Exception:
+        return None, None, None
+
+async def fetch_from_waifu_im(session, positive):
+    try:
+        q = map_tag_for_provider("waifu_im", positive)
+        base = "https://api.waifu.im/search"
+        params = {"included_tags": q, "is_nsfw": "false", "limit": 8}
+        headers = {}
+        if WAIFUIM_API_KEY:
+            headers["Authorization"] = f"Bearer {WAIFUIM_API_KEY}"
+        async with session.get(base, params=params, headers=headers or None, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None, None, None
+            payload = await resp.json()
+            images = payload.get("images", [])
+            if not images: return None, None, None
+            img = random.choice(images)
+            gif_url = img.get("url")
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(img) + " " + (q or "")): return None, None, None
+            extract_and_add_tags_from_meta(str(img.get("tags", "")), GIF_TAGS, data)
+            return gif_url, f"waifu_im_{q}", img
+    except Exception:
+        return None, None, None
+
+async def fetch_from_nekos_best(session, positive):
+    try:
+        q = map_tag_for_provider("nekos_best", positive)
+        url = f"https://nekos.best/api/v2/{quote_plus(q)}?amount=1"
+        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200:
+                if DEBUG_FETCH: logger.debug(f"nekos.best {q} -> {resp.status}")
+                return None, None, None
+            payload = await resp.json()
+            results = payload.get("results", [])
+            if not results: return None, None, None
+            r = results[0]
+            gif_url = r.get("url")
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(r) + " " + (q or "")): return None, None, None
+            extract_and_add_tags_from_meta(json.dumps(r), GIF_TAGS, data)
+            return gif_url, f"nekos_best_{q}", r
+    except Exception:
+        return None, None, None
+
+async def fetch_from_danbooru(session, positive):
+    try:
+        blocked_str = " ".join([f"-{b}" for b in BLOCKED_TAGS])
+        tags = f"{positive} rating:questionable {blocked_str} 1girl -rating:explicit".strip()
+        base = "https://danbooru.donmai.us/posts.json"
+        params = {"tags": tags, "limit": 20, "random": "true"}
+        headers = {}
+        if DANBOORU_USER and DANBOORU_API_KEY:
+            import base64
+            credentials = base64.b64encode(f"{DANBOORU_USER}:{DANBOORU_API_KEY}".encode()).decode()
+            headers["Authorization"] = f"Basic {credentials}"
+        async with session.get(base, params=params, headers=headers or None, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None, None, None
+            posts = await resp.json()
+            if not posts: return None, None, None
+            post = random.choice(posts)
+            gif_url = post.get("file_url") or post.get("large_file_url")
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(post)): return None, None, None
+            extract_and_add_tags_from_meta(str(post.get("tag_string", "")), GIF_TAGS, data)
+            return gif_url, f"danbooru_{positive}", post
+    except Exception:
+        return None, None, None
+
+async def fetch_from_gelbooru(session, positive):
+    try:
+        blocked_str = " ".join([f"-{b}" for b in BLOCKED_TAGS])
+        tags = f"{positive} rating:questionable {blocked_str} 1girl -rating:explicit".strip()
+        base = "https://gelbooru.com/index.php"
+        params = {
+            "page": "dapi",
+            "s": "post",
+            "q": "index",
+            "json": "1",
+            "tags": tags,
+            "limit": 20
+        }
+        async with session.get(base, params=params, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None, None, None
+            payload = await resp.json()
+            posts = payload.get("post", [])
+            if not posts: return None, None, None
+            post = random.choice(posts)
+            gif_url = post.get("file_url")
+            if not gif_url or filename_has_block_keyword(gif_url): return None, None, None
+            if contains_illegal_indicators(json.dumps(post)): return None, None, None
+            extract_and_add_tags_from_meta(post.get("tags", ""), GIF_TAGS, data)
+            return gif_url, f"gelbooru_{positive}", post
+    except Exception:
+        return None, None, None
+
+PROVIDERS = [
+    ("waifu_im", fetch_from_waifu_im, 30),
+    ("danbooru", fetch_from_danbooru, 25),
+    ("gelbooru", fetch_from_gelbooru, 20),
+    ("nekos_best", fetch_from_nekos_best, 15),
+    ("waifu_pics", fetch_from_waifu_pics, 10),
+]
+
+def _hash_url(url):
+    return hashlib.md5(url.encode()).hexdigest()
+
+def _choose_random_provider():
+    if TRUE_RANDOM:
+        return random.choice(PROVIDERS)
+    else:
+        weights = [w for _, _, w in PROVIDERS]
+        return random.choices(PROVIDERS, weights=weights, k=1)[0]
+
+async def _fetch_one_gif(session, user_id=None, used_hashes=None):
+    if used_hashes is None:
+        used_hashes = set()
+    
+    tag = random.choice(GIF_TAGS)
+    name, fetch_func, weight = _choose_random_provider()
+    
+    try:
+        url, source, meta = await fetch_func(session, tag)
+        if url:
+            h = _hash_url(url)
+            if h not in used_hashes:
+                return url, source, meta, h
+    except Exception as e:
+        if DEBUG_FETCH:
+            logger.debug(f"{name} fail: {e}")
+    
+    return None, None, None, None
+
+async def fetch_random_gif(session, user_id=None):
+    user_id_str = str(user_id) if user_id else "global"
+    user_history = data["sent_history"].setdefault(user_id_str, [])
+    used_hashes = set(user_history)
+    
+    for attempt in range(FETCH_ATTEMPTS):
+        url, source, meta, url_hash = await _fetch_one_gif(session, user_id, used_hashes)
+        if url:
+            user_history.append(url_hash)
+            if len(user_history) > MAX_USED_GIFS_PER_USER:
+                user_history.pop(0)
+            data["sent_history"][user_id_str] = user_history
+            logger.info(f"Attempt {attempt+1}: Fetched from {source}")
+            return url, source, meta
+    
+    logger.warning(f"Failed to fetch after {FETCH_ATTEMPTS} attempts")
+    return None, None, None
+
+async def compress_image(image_bytes, target_size=DISCORD_MAX_UPLOAD):
+    if not Image:
+        return image_bytes
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.format == "GIF":
+            return image_bytes
+        output = io.BytesIO()
+        quality = 95
+        while quality > 10:
+            output.seek(0)
+            output.truncate()
+            img.save(output, format=img.format or "JPEG", quality=quality, optimize=True)
+            if output.tell() <= target_size:
+                return output.getvalue()
+            quality -= 10
+        return output.getvalue()
+    except Exception as e:
+        logger.error(f"Compression failed: {e}")
+        return image_bytes
+
+async def send_greeting_with_image_embed(channel, session, greeting_text, image_url, member):
+    try:
+        image_bytes, content_type = await _download_bytes_with_limit(session, image_url)
+        if not image_bytes or len(image_bytes) > DISCORD_MAX_UPLOAD:
+            if image_bytes and len(image_bytes) > DISCORD_MAX_UPLOAD:
+                image_bytes = await compress_image(image_bytes)
+            if not image_bytes or len(image_bytes) > DISCORD_MAX_UPLOAD:
+                await channel.send(greeting_text)
+                return
+        
+        ext = ".jpg"
+        if "gif" in image_url.lower() or (content_type and "gif" in content_type):
+            ext = ".gif"
+        elif "png" in image_url.lower() or (content_type and "png" in content_type):
+            ext = ".png"
+        elif "webp" in image_url.lower() or (content_type and "webp" in content_type):
+            ext = ".webp"
+        
+        filename = f"sfw{ext}"
+        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+        
+        embed = discord.Embed(
+            description=greeting_text,
+            color=discord.Color.from_rgb(255, 182, 193)
+        )
+        embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text="SFW Ecchi Bot")
+        
+        await channel.send(embed=embed, file=file)
+        logger.info(f"Sent greeting embed with image: {filename}")
+    except Exception as e:
+        logger.error(f"Failed to send greeting embed: {e}")
+        await channel.send(greeting_text)
 
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
 intents.voice_states = True
 intents.message_content = True
-
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    try:
-        autosave_task.start()
-    except RuntimeError:
-        pass
-    available = []
-    for p in PROVIDER_FETCHERS.keys():
-        key_ok = True
-        if p == "waifu_it" and not WAIFUIT_API_KEY:
-            key_ok = False
-        if p == "danbooru" and (not DANBOORU_API_KEY or not DANBOORU_USER):
-            key_ok = False
-        available.append((p, key_ok, data.get("provider_weights", {}).get(p, 1)))
-    logger.info("Provider availability (provider, api_key_hint, stored_weight):")
-    for t in available:
-        logger.info(t)
-    logger.info(f"Logged in as {bot.user} (id={bot.user.id})")
+    logger.info(f"Logged in as {bot.user}")
+    autosave_task.start()
+    check_vc.start()
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.bot:
+    if member.id == bot.user.id:
         return
-    text_channel = bot.get_channel(VC_CHANNEL_ID)
-
-    if after.channel and (after.channel.id in VC_IDS) and (before.channel != after.channel):
-        try:
-            vc = discord.utils.get(bot.voice_clients, guild=member.guild)
-            if vc:
-                if vc.channel.id != after.channel.id:
-                    try:
-                        await vc.move_to(after.channel)
-                    except Exception:
-                        pass
-            else:
+    
+    if before.channel is None and after.channel is not None:
+        if after.channel.id in VC_IDS:
+            guild = after.channel.guild
+            if guild.voice_client is None:
                 try:
                     await after.channel.connect()
+                    logger.info(f"Bot joined VC: {after.channel.name}")
+                except Exception as e:
+                    logger.error(f"Failed to join VC: {e}")
+            
+            channel = bot.get_channel(VC_CHANNEL_ID)
+            if channel:
+                try:
+                    greeting = random.choice(JOIN_GREETINGS).format(display_name=member.display_name)
+                    
+                    async with aiohttp.ClientSession() as session:
+                        gif_url, source, meta = await fetch_random_gif(session, member.id)
+                        if gif_url:
+                            await send_greeting_with_image_embed(channel, session, greeting, gif_url, member)
+                            logger.info(f"Sent join greeting embed from {source}")
+                        else:
+                            await channel.send(greeting)
+                except Exception as e:
+                    logger.error(f"Failed to send join greeting: {e}")
+    
+    elif before.channel is not None and after.channel is None:
+        if before.channel.id in VC_IDS:
+            channel = bot.get_channel(VC_CHANNEL_ID)
+            if channel:
+                try:
+                    leave_msg = random.choice(LEAVE_GREETINGS).format(display_name=member.display_name)
+                    
+                    async with aiohttp.ClientSession() as session:
+                        gif_url, source, meta = await fetch_random_gif(session, member.id)
+                        if gif_url:
+                            await send_greeting_with_image_embed(channel, session, leave_msg, gif_url, member)
+                            logger.info(f"Sent leave greeting embed from {source}")
+                        else:
+                            await channel.send(leave_msg)
+                except Exception as e:
+                    logger.error(f"Failed to send leave greeting: {e}")
+            
+            remaining = [m for m in before.channel.members if not m.bot]
+            if len(remaining) == 0:
+                guild = before.channel.guild
+                if guild.voice_client:
+                    try:
+                        await guild.voice_client.disconnect()
+                        logger.info(f"Bot left VC: {before.channel.name} (no users)")
+                    except Exception as e:
+                        logger.error(f"Failed to leave VC: {e}")
+
+@tasks.loop(seconds=120)
+async def check_vc():
+    for vc_id in VC_IDS:
+        vc = bot.get_channel(vc_id)
+        if not vc or not isinstance(vc, discord.VoiceChannel):
+            continue
+        
+        remaining = [m for m in vc.members if not m.bot]
+        if len(remaining) == 0:
+            if vc.guild.voice_client:
+                try:
+                    await vc.guild.voice_client.disconnect()
+                    logger.info(f"Bot left empty VC: {vc.name}")
                 except Exception:
                     pass
-        except Exception as e:
-            logger.warning(f"VC join/connect error: {e}")
 
-        raw = random.choice(JOIN_GREETINGS)
-        msg = raw.format(display_name=member.display_name)
-        data["join_counts"] = data.get("join_counts", {})
-        data["join_counts"][str(member.id)] = data["join_counts"].get(str(member.id), 0) + 1
-        embed = make_embed("Welcome!", msg, member, "join", data["join_counts"][str(member.id)])
-        gif_bytes, gif_name, gif_url, ctype = await fetch_gif(member.id)
-        await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url, ctype)
-
-    if before.channel and (before.channel.id in VC_IDS) and (after.channel != before.channel):
-        raw = random.choice(LEAVE_GREETINGS)
-        msg = raw.format(display_name=member.display_name)
-        embed = make_embed("Goodbye!", msg, member, "leave")
-        gif_bytes, gif_name, gif_url, ctype = await fetch_gif(member.id)
-        await send_embed_with_media(text_channel, member, embed, gif_bytes, gif_name, gif_url, ctype)
-        try:
-            vc = discord.utils.get(bot.voice_clients, guild=member.guild)
-            if vc and vc.channel and vc.channel.id == before.channel.id:
-                non_bot_members = [m for m in vc.channel.members if not m.bot]
-                if len(non_bot_members) == 0:
-                    try:
-                        await vc.disconnect()
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Error checking/disconnecting VC: {e}")
-
-@bot.command(name="sfw", aliases=["cute","waifu"])
-@commands.cooldown(1, 3, commands.BucketType.user)
+@bot.command()
 async def sfw(ctx):
-    await ctx.trigger_typing()
-    b, name, url, ctype = await fetch_gif(ctx.author.id)
-    embed = make_embed("Here's something wholesome", "", ctx.author)
-    if b:
-        await send_embed_with_media(ctx.channel, ctx.author, embed, b, name, url, ctype)
-    elif url:
-        if url not in (embed.description or ""):
-            embed.description = (embed.description or "") + f"\n\n[View media here]({url})"
-        await ctx.send(embed=embed)
-        await record_sent_for_user(ctx.author.id, url)
-    else:
-        await ctx.send("Couldn't find SFW media right now. Try again later.")
+    async with aiohttp.ClientSession() as session:
+        gif_url, source, meta = await fetch_random_gif(session, ctx.author.id)
+        if gif_url:
+            try:
+                image_bytes, content_type = await _download_bytes_with_limit(session, gif_url)
+                if image_bytes:
+                    if len(image_bytes) > DISCORD_MAX_UPLOAD:
+                        image_bytes = await compress_image(image_bytes)
+                    if image_bytes and len(image_bytes) <= DISCORD_MAX_UPLOAD:
+                        ext = ".jpg"
+                        if "gif" in gif_url.lower() or (content_type and "gif" in content_type):
+                            ext = ".gif"
+                        elif "png" in gif_url.lower() or (content_type and "png" in content_type):
+                            ext = ".png"
+                        filename = f"sfw{ext}"
+                        file = discord.File(io.BytesIO(image_bytes), filename=filename)
+                        await ctx.send(file=file)
+            except:
+                await ctx.send("Failed to fetch SFW content. Try again.")
+        else:
+            await ctx.send("Failed to fetch SFW content. Try again.")
 
-@bot.command(name="tags")
-async def tags(ctx):
-    await ctx.send("Available seed tags: " + ", ".join(GIF_TAGS[:50]))
-
-if __name__ == "__main__":
-    if not TOKEN:
-        logger.error("TOKEN not set; exiting.")
-    else:
-        bot.run(TOKEN)
+bot.run(TOKEN)
