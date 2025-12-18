@@ -619,7 +619,7 @@ async def compress_image(image_bytes, target_size=DISCORD_MAX_UPLOAD):
         logger.error(f"Compression failed: {e}")
         return image_bytes
 
-async def send_greeting_with_image_embed(channel, session, greeting_text, image_url, member):
+async def send_greeting_with_image_embed(channel, session, greeting_text, image_url, member, send_to_dm=None):
     try:
         image_bytes, content_type = await _download_bytes_with_limit(session, image_url)
         if not image_bytes or len(image_bytes) > DISCORD_MAX_UPLOAD:
@@ -649,6 +649,22 @@ async def send_greeting_with_image_embed(channel, session, greeting_text, image_
         embed.set_footer(text="SFW Ecchi Bot")
         
         await channel.send(embed=embed, file=file)
+        
+        if send_to_dm:
+            try:
+                dm_file = discord.File(io.BytesIO(image_bytes), filename=filename)
+                dm_embed = discord.Embed(
+                    description=greeting_text,
+                    color=discord.Color.from_rgb(255, 182, 193)
+                )
+                dm_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+                dm_embed.set_image(url=f"attachment://{filename}")
+                dm_embed.set_footer(text="SFW Ecchi Bot")
+                await send_to_dm.send(embed=dm_embed, file=dm_file)
+                logger.info(f"Sent DM to {send_to_dm.display_name}")
+            except Exception as e:
+                logger.warning(f"Could not DM: {e}")
+                
         logger.info(f"Sent greeting embed with image: {filename}")
     except Exception as e:
         logger.error(f"Failed to send greeting embed: {e}")
@@ -786,7 +802,7 @@ async def on_voice_state_update(member, before, after):
                 async with aiohttp.ClientSession() as session:
                     gif_url, source, meta = await fetch_random_gif(session, member.id)
                     if gif_url:
-                        await send_greeting_with_image_embed(channel, session, greeting, gif_url, member)
+                        await send_greeting_with_image_embed(channel, session, greeting, gif_url, member, send_to_dm=member)
                         logger.info(f"Sent join greeting embed from {source}")
                     else:
                         await channel.send(greeting)
@@ -805,7 +821,7 @@ async def on_voice_state_update(member, before, after):
                 async with aiohttp.ClientSession() as session:
                     gif_url, source, meta = await fetch_random_gif(session, member.id)
                     if gif_url:
-                        await send_greeting_with_image_embed(channel, session, leave_msg, gif_url, member)
+                        await send_greeting_with_image_embed(channel, session, leave_msg, gif_url, member, send_to_dm=member)
                         logger.info(f"Sent leave greeting embed from {source}")
                     else:
                         await channel.send(leave_msg)
